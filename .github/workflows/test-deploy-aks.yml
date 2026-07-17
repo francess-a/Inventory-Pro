@@ -1,0 +1,68 @@
+name: Test, Coverage & Deploy to AKS with Helm
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # Backend tests with coverage
+      - name: Backend Tests with Coverage
+        run: |
+          cd backend
+          npm install
+          npm run test:coverage -- --coverageThreshold='{"global":{"branches":80,"functions":80,"lines":80,"statements":80}}'
+
+      # Frontend tests with coverage
+      - name: Frontend Tests with Coverage
+        run: |
+          cd frontend
+          npm install
+          npm run test:coverage -- --coverageThreshold='{"global":{"branches":80,"functions":80,"lines":80,"statements":80}}'
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test   # Only run if tests pass AND coverage >= 80%
+    steps:
+      # Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Azure Login
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Get AKS credentials
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_AKS_CLUSTER }} \
+            --overwrite-existing
+
+      # Install Helm
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      # Helm upgrade
+      - name: Helm Upgrade
+        run: |
+          helm upgrade --install inventory ./helm/inventory \
+            --set image.backend=${{ secrets.ACR_LOGIN_SERVER }}/inventory-backend:latest \
+            --set image.frontend=${{ secrets.ACR_LOGIN_SERVER }}/inventory-frontend:latest \
+            --set ingress.host=${{ secrets.INVENTORY_HOST }}
