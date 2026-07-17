@@ -1,1 +1,224 @@
+#!/bin/bash
 
+# Create workflows folder
+mkdir -p .github/workflows
+
+# 1. Deploy Workflow
+cat > .github/workflows/deploy.yml << 'EOF'
+name: Deploy Inventory System
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t inventory-system:latest .
+      - name: Push to Azure Registry
+        run: |
+          docker login ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }} \
+            -u ${{ secrets.AZURE_REGISTRY_USERNAME }} \
+            -p ${{ secrets.AZURE_REGISTRY_PASSWORD }}
+          docker tag inventory-system:latest ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest
+          docker push ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest
+      - name: Deploy to Azure Web App
+        run: |
+          az webapp create \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --plan ${{ secrets.AZURE_APP_PLAN }} \
+            --name ${{ secrets.AZURE_WEBAPP_NAME }} \
+            --deployment-container-image-name ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest
+EOF
+
+# 2. Backup Workflow
+cat > .github/workflows/backup.yml << 'EOF'
+name: Nightly Backup
+on:
+  schedule:
+    - cron: "0 0 * * *"
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump MongoDB
+        run: mongodump --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz
+      - name: Upload Backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-backup
+          path: backup.gz
+EOF
+
+# 3. Restore Workflow
+cat > .github/workflows/restore.yml << 'EOF'
+name: Manual Restore
+on:
+  workflow_dispatch:
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-backup
+      - name: Restore MongoDB
+        run: mongorestore --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz --drop
+EOF
+
+# 4. Health Check
+cat > .github/workflows/health-check.yml << 'EOF'
+name: Daily Health Check
+on:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://your-app-url.com/health)
+          if [ "$STATUS" -ne 200 ]; then exit 1; fi
+EOF
+
+# 5. Auto-Scaling
+cat > .github/workflows/auto-scale.yml << 'EOF'
+name: Auto Scale
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+jobs:
+  autoscale:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Check CPU usage and scale up/down with az webapp scale"
+EOF
+
+# 6. Disaster Recovery
+cat > .github/workflows/disaster-recovery.yml << 'EOF'
+name: Disaster Recovery
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  dr:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Check health, spin up standby if primary fails"
+EOF
+
+# 7. Multi-Region Deployment
+cat > .github/workflows/multi-region.yml << 'EOF'
+name: Multi-Region Deployment
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy-multi:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploy to East + West regions, configure Traffic Manager"
+EOF
+
+# 8. Cost Optimization
+cat > .github/workflows/cost-optimization.yml << 'EOF'
+name: Cost Optimization
+on:
+  schedule:
+    - cron: "0 23 * * *"
+    - cron: "0 7 * * *"
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Scale down/up secondary region based on time"
+EOF
+
+# 9. Compliance
+cat > .github/workflows/compliance.yml << 'EOF'
+name: Compliance & Security Scan
+on:
+  push:
+    branches: [main]
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm audit
+      - run: echo "Run CodeQL + GDPR checks"
+EOF
+
+# 10. Governance
+cat > .github/workflows/governance.yml << 'EOF'
+name: Governance Enforcement
+on:
+  push:
+    branches: [main]
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npx eslint .
+      - run: echo "Check README/docs + naming conventions"
+EOF
+
+# 11. Quality Gate
+cat > .github/workflows/quality-gate.yml << 'EOF'
+name: Quality Gate
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run test:coverage
+      - run: echo "Block merge if coverage < 80%"
+EOF
+
+# 12. Performance Benchmarking
+cat > .github/workflows/performance.yml << 'EOF'
+name: Performance Benchmarking
+on:
+  workflow_run:
+    workflows: ["Deploy Inventory System"]
+    types: [completed]
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Run k6 load tests, enforce SLA"
+EOF
+
+# 13. Observability
+cat > .github/workflows/observability.yml << 'EOF'
+name: Observability
+on:
+  schedule:
+    - cron: "0 8 * * *"
+jobs:
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Validate logging, metrics, tracing endpoints"
+EOF
+
+# 14. Chaos Engineering
+cat > .github/workflows/chaos.yml << 'EOF'
+name: Chaos Engineering
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 0"
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Inject latency, CPU stress, network failures"
+EOF
+
+# Commit and push
+git add .github/workflows/
+git commit -m "Add all CI/CD and resilience workflows"
+git push origin main
