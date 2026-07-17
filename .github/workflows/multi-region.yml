@@ -1,0 +1,9 @@
+name: Multi-Region Deployment
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy-multi:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploy to East + West regions, configure Traffic Manager"

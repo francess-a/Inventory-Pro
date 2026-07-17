@@ -1,0 +1,15 @@
+name: Nightly Backup
+on:
+  schedule:
+    - cron: "0 0 * * *"
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump MongoDB
+        run: mongodump --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz
+      - name: Upload Backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-backup
+          path: backup.gz

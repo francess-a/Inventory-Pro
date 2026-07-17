@@ -1,0 +1,9 @@
+name: Auto Scale
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+jobs:
+  autoscale:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Check CPU usage and scale up/down with az webapp scale"

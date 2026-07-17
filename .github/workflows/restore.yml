@@ -1,0 +1,12 @@
+name: Manual Restore
+on:
+  workflow_dispatch:
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-backup
+      - name: Restore MongoDB
+        run: mongorestore --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz --drop

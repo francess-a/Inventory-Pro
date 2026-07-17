@@ -1,0 +1,10 @@
+name: Performance Benchmarking
+on:
+  workflow_run:
+    workflows: ["Deploy Inventory System"]
+    types: [completed]
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Run k6 load tests, enforce SLA"

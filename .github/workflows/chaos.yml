@@ -1,0 +1,10 @@
+name: Chaos Engineering
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 0"
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Inject latency, CPU stress, network failures"

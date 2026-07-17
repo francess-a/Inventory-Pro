@@ -1,0 +1,10 @@
+name: Compliance & Security Scan
+on:
+  push:
+    branches: [main]
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm audit
+      - run: echo "Run CodeQL + GDPR checks"

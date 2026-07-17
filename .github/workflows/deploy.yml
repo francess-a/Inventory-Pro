@@ -1,0 +1,25 @@
+name: Deploy Inventory System
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t inventory-system:latest .
+      - name: Push to Azure Registry
+        run: |
+          docker login ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }} \
+            -u ${{ secrets.AZURE_REGISTRY_USERNAME }} \
+            -p ${{ secrets.AZURE_REGISTRY_PASSWORD }}
+          docker tag inventory-system:latest ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest
+          docker push ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest
+      - name: Deploy to Azure Web App
+        run: |
+          az webapp create \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --plan ${{ secrets.AZURE_APP_PLAN }} \
+            --name ${{ secrets.AZURE_WEBAPP_NAME }} \
+            --deployment-container-image-name ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/inventory-system:latest

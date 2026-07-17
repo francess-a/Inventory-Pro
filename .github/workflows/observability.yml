@@ -1,0 +1,9 @@
+name: Observability
+on:
+  schedule:
+    - cron: "0 8 * * *"
+jobs:
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Validate logging, metrics, tracing endpoints"

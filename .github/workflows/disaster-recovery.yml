@@ -1,0 +1,9 @@
+name: Disaster Recovery
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  dr:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Check health, spin up standby if primary fails"

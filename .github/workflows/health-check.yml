@@ -1,0 +1,11 @@
+name: Daily Health Check
+on:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://your-app-url.com/health)
+          if [ "$STATUS" -ne 200 ]; then exit 1; fi

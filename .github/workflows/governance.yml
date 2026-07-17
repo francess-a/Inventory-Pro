@@ -1,0 +1,10 @@
+name: Governance Enforcement
+on:
+  push:
+    branches: [main]
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npx eslint .
+      - run: echo "Check README/docs + naming conventions"

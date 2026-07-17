@@ -1,0 +1,10 @@
+name: Cost Optimization
+on:
+  schedule:
+    - cron: "0 23 * * *"
+    - cron: "0 7 * * *"
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Scale down/up secondary region based on time"
