@@ -131,7 +131,7 @@ Configure these in **Settings → Secrets and variables → Actions**:
 
 ---
 
-## 🌍 Architecture
+## 🌍 Infrastructure
 
 - **Azure Web Apps** for hosting
 - **Azure Container Registry** for images
