@@ -166,11 +166,12 @@ const main = async () => {
             receivedAt: at(day, 7),
             invoiceNumber: `INV-${Math.floor(rand() * 900000 + 100000)}`,
             lines: delivery.po.items.map((line) => {
-              const rejected = rand() < delivery.vendor.rejectRate * 3 ? Math.ceil(line.quantityOrdered * 0.1) : 0;
-              const shortShip = rand() < 0.08 ? Math.floor(line.quantityOrdered * 0.15) : 0;
+              const ordered = Number(line.quantityOrdered);
+              const rejected = rand() < delivery.vendor.rejectRate * 3 ? Math.ceil(ordered * 0.1) : 0;
+              const shortShip = rand() < 0.08 ? Math.floor(ordered * 0.15) : 0;
               return {
                 poItemId: line.id,
-                quantityReceived: line.quantityOrdered - rejected - shortShip,
+                quantityReceived: ordered - rejected - shortShip,
                 quantityRejected: rejected,
                 rejectionReason: rejected ? pick(["Damaged in transit", "Below quality spec", "Short shelf life"]) : undefined,
               };
@@ -179,7 +180,7 @@ const main = async () => {
           for (const line of delivery.po.items) {
             openOrderFor.delete(line.itemId);
             const item = items.find((i) => i.id === line.itemId);
-            item.onHand = (await tx.centralStock.findUnique({ where: { itemId: item.id } })).quantityOnHand;
+            item.onHand = Number((await tx.centralStock.findUnique({ where: { itemId: item.id } })).quantityOnHand);
           }
         }
 
@@ -204,7 +205,9 @@ const main = async () => {
         const weekendBoost = [0, 6].includes(at(day, 0).getDay()) ? 1.25 : 1;
         const byDept = new Map();
         for (const item of items) {
-          const qty = Math.max(0, Math.round(item.demand * weekendBoost * (1 + item.cv * normal())));
+          // Weighed goods are requisitioned to 0.1 kg/ltr, counted goods in whole units.
+          const step = ["kg", "ltr"].includes(item.uom) ? 10 : 1;
+          const qty = Math.max(0, Math.round(item.demand * weekendBoost * (1 + item.cv * normal()) * step) / step);
           if (qty === 0) continue;
           const dept = pick(item.depts);
           if (!byDept.has(dept)) byDept.set(dept, []);
@@ -229,8 +232,8 @@ const main = async () => {
           // Issue what is available; shortages are issued short.
           const issueLines = req.items.map((line) => {
             const item = items.find((i) => i.id === line.itemId);
-            const qty = Math.min(line.quantityRequested, item.onHand);
-            item.onHand -= qty;
+            const qty = Math.min(Number(line.quantityRequested), item.onHand);
+            item.onHand = Math.round((item.onHand - qty) * 1000) / 1000;
             return { requisitionItemId: line.id, quantityIssued: qty };
           });
           await issueInTx(tx, req.id, { lines: issueLines }, "store keeper", at(day, 11));
@@ -266,9 +269,9 @@ const main = async () => {
     const { adjustCentral, issueFromCentral } = require("../src/services/ledger");
     const tomato = items.find((i) => i.sku === "VEG-TOM");
     const towel = items.find((i) => i.sku === "LIN-BTW");
-    const tomatoStock = (await tx.centralStock.findUnique({ where: { itemId: tomato.id } })).quantityOnHand;
-    if (tomatoStock >= 3) {
-      await issueFromCentral(tx, { itemId: tomato.id, quantity: 3, type: "WASTE", destination: "WASTE_BIN", remarks: "Spoiled in cold room" });
+    const tomatoStock = Number((await tx.centralStock.findUnique({ where: { itemId: tomato.id } })).quantityOnHand);
+    if (tomatoStock >= 2.5) {
+      await issueFromCentral(tx, { itemId: tomato.id, quantity: 2.5, type: "WASTE", destination: "WASTE_BIN", remarks: "Spoiled in cold room" });
     }
     await adjustCentral(tx, { itemId: towel.id, quantityChange: -2, remarks: "Physical count variance" }).catch(() => {});
   });

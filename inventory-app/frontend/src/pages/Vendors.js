@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
 import hotelApi, { errorMessage } from "../services/hotelApi";
 import { num, ratioPct, date, label } from "../utils/format";
+import { useCanApprove } from "../utils/roles";
 
 const COMPONENT_LABELS = { onTime: "On-time", fillRate: "Fill rate", quality: "Quality", price: "Price" };
 
 const EMPTY_VENDOR = { vendorName: "", contactName: "", email: "", phone: "", leadTimeDays: 1 };
 
 export default function Vendors() {
+  const canApprove = useCanApprove();
   const [cards, setCards] = useState([]);
   const [detail, setDetail] = useState(null);
   const [form, setForm] = useState(EMPTY_VENDOR);
@@ -56,10 +58,12 @@ export default function Vendors() {
         remaining weights rescaled. Grades: A ≥ 85, B ≥ 70, C ≥ 55, D below.
       </p>
       {error && <p className="error">{error}</p>}
-      <div className="toolbar">
-        <button type="button" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "Add vendor"}</button>
-      </div>
-      {showAdd && (
+      {canApprove && (
+        <div className="toolbar">
+          <button type="button" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "Add vendor"}</button>
+        </div>
+      )}
+      {canApprove && showAdd && (
         <form className="card form-grid" onSubmit={save}>
           <label>Vendor name<input required {...field("vendorName")} /></label>
           <label>Contact name<input required {...field("contactName")} /></label>

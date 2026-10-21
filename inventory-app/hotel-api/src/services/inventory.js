@@ -1,7 +1,7 @@
 // Item master, outlet departments and direct stock operations (adjustments, waste).
 const prisma = require("../db");
 const { ItemCategory, MainOutlet, SubDepartment } = require("@prisma/client");
-const { badRequest, notFound, uuid, int, money, text, oneOf } = require("../lib/http");
+const { badRequest, notFound, uuid, quantity, money, text, oneOf } = require("../lib/http");
 const { adjustCentral, issueFromCentral, wasteFromOutlet } = require("./ledger");
 
 const CATEGORIES = Object.values(ItemCategory);
@@ -17,10 +17,10 @@ const parseItem = (body, { partial = false } = {}) => {
     category: oneOf(body.category, "category", CATEGORIES, opt),
     costPrice: money(body.costPrice, "costPrice", { optional: true }),
     unitOfMeasure: text(body.unitOfMeasure, "unitOfMeasure", opt),
-    minStockLevel: int(body.minStockLevel, "minStockLevel", { optional: true }),
-    maxStockLevel: int(body.maxStockLevel, "maxStockLevel", { optional: true }),
-    reorderPoint: int(body.reorderPoint, "reorderPoint", { optional: true }),
-    orderMultiple: int(body.orderMultiple, "orderMultiple", { min: 1, optional: true }),
+    minStockLevel: quantity(body.minStockLevel, "minStockLevel", { optional: true }),
+    maxStockLevel: quantity(body.maxStockLevel, "maxStockLevel", { optional: true }),
+    reorderPoint: quantity(body.reorderPoint, "reorderPoint", { optional: true }),
+    orderMultiple: quantity(body.orderMultiple, "orderMultiple", { positive: true, optional: true }),
     ...(typeof body.autoPlanning === "boolean" && { autoPlanning: body.autoPlanning }),
     ...(typeof body.isActive === "boolean" && { isActive: body.isActive }),
   };
@@ -106,8 +106,8 @@ const outletStock = (outletDepartmentId) =>
 
 const adjustStock = (body) => {
   const itemId = uuid(body.itemId, "itemId");
-  const quantityChange = Number(body.quantityChange);
-  if (!Number.isInteger(quantityChange) || quantityChange === 0) throw badRequest("quantityChange must be a non-zero integer");
+  const quantityChange = quantity(body.quantityChange, "quantityChange", { signed: true });
+  if (quantityChange === 0) throw badRequest("quantityChange must not be zero");
   const remarks = text(body.reason, "reason");
   return prisma.$transaction((tx) => adjustCentral(tx, { itemId, quantityChange, remarks }));
 };
@@ -115,13 +115,13 @@ const adjustStock = (body) => {
 // Waste from the central store (location 'CENTRAL') or from an outlet (department UUID).
 const recordWaste = (body) => {
   const itemId = uuid(body.itemId, "itemId");
-  const quantity = int(body.quantity, "quantity", { min: 1 });
+  const wasted = quantity(body.quantity, "quantity", { positive: true });
   const remarks = text(body.reason, "reason");
   const location = body.location ?? "CENTRAL";
   return prisma.$transaction((tx) =>
     location === "CENTRAL"
-      ? issueFromCentral(tx, { itemId, quantity, type: "WASTE", destination: "WASTE_BIN", remarks })
-      : wasteFromOutlet(tx, { itemId, outletDepartmentId: uuid(location, "location"), quantity, remarks })
+      ? issueFromCentral(tx, { itemId, quantity: wasted, type: "WASTE", destination: "WASTE_BIN", remarks })
+      : wasteFromOutlet(tx, { itemId, outletDepartmentId: uuid(location, "location"), quantity: wasted, remarks })
   );
 };
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import hotelApi, { errorMessage } from "../services/hotelApi";
-import { money, date, departmentName, label } from "../utils/format";
+import { money, num, date, departmentName, label } from "../utils/format";
+import { useCanApprove } from "../utils/roles";
 
 const STATUSES = ["PENDING", "APPROVED", "ISSUED", "REJECTED"];
 const emptyLine = () => ({ itemId: "", quantityRequested: "" });
@@ -55,11 +56,11 @@ function NewRequisition({ departments, items, onCreated, onError }) {
             </label>
             <label>
               Quantity
-              <input type="number" min="1" required value={line.quantityRequested} onChange={(e) => setLine(i, { quantityRequested: e.target.value })} />
+              <input type="number" min="0" step="any" required value={line.quantityRequested} onChange={(e) => setLine(i, { quantityRequested: e.target.value })} />
             </label>
             {item && (
               <span className="muted">
-                in store: {item.centralStock?.quantityOnHand ?? 0} {item.unitOfMeasure} · est.{" "}
+                in store: {num(item.centralStock?.quantityOnHand ?? 0, 3)} {item.unitOfMeasure} · est.{" "}
                 {money(Number(item.costPrice) * (Number(line.quantityRequested) || 0))}
               </span>
             )}
@@ -80,7 +81,7 @@ function NewRequisition({ departments, items, onCreated, onError }) {
 function IssueForm({ requisition, stockByItem, onDone, onError }) {
   const [quantities, setQuantities] = useState(
     Object.fromEntries(
-      requisition.items.map((l) => [l.id, Math.min(l.quantityRequested, stockByItem.get(l.itemId) ?? 0)])
+      requisition.items.map((l) => [l.id, Math.min(Number(l.quantityRequested), stockByItem.get(l.itemId) ?? 0)])
     )
   );
 
@@ -118,7 +119,7 @@ function IssueForm({ requisition, stockByItem, onDone, onError }) {
               <td className="num">{l.quantityRequested} {l.item.unitOfMeasure}</td>
               <td className="num">{stockByItem.get(l.itemId) ?? 0}</td>
               <td>
-                <input type="number" min="0" max={l.quantityRequested} style={{ width: 90 }} value={quantities[l.id]}
+                <input type="number" min="0" step="any" max={l.quantityRequested} style={{ width: 90 }} value={quantities[l.id]}
                   onChange={(e) => setQuantities({ ...quantities, [l.id]: e.target.value })} />
               </td>
               <td className="num">{money(Number(l.item.costPrice) * (Number(quantities[l.id]) || 0))}</td>
@@ -185,6 +186,7 @@ function Consumption() {
 }
 
 export default function Requisitions() {
+  const canApprove = useCanApprove();
   const [requisitions, setRequisitions] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [items, setItems] = useState([]);
@@ -214,7 +216,7 @@ export default function Requisitions() {
     load();
   }, [load]);
 
-  const stockByItem = useMemo(() => new Map(items.map((i) => [i.id, i.centralStock?.quantityOnHand ?? 0])), [items]);
+  const stockByItem = useMemo(() => new Map(items.map((i) => [i.id, Number(i.centralStock?.quantityOnHand ?? 0)])), [items]);
 
   const decide = async (req, action) => {
     try {
@@ -298,7 +300,7 @@ export default function Requisitions() {
                   <td className="num">{money(r.estimatedValue)}</td>
                   <td className="num">{r.status === "ISSUED" ? money(r.issuedValue) : ""}</td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {r.status === "PENDING" && (
+                    {canApprove && r.status === "PENDING" && (
                       <>
                         <button type="button" className="link" onClick={() => decide(r, "approve")}>Approve</button>
                         <button type="button" className="link" onClick={() => decide(r, "reject")}>Reject</button>
@@ -318,7 +320,7 @@ export default function Requisitions() {
                         requested {l.quantityRequested} · issued {l.quantityIssued} {l.item.unitOfMeasure}
                       </td>
                       <td className="num muted">{l.unitCost ? `${money(l.unitCost)} / ${l.item.unitOfMeasure}` : ""}</td>
-                      <td className="num">{l.quantityIssued ? money(l.issuedValue) : ""}</td>
+                      <td className="num">{Number(l.quantityIssued) ? money(l.issuedValue) : ""}</td>
                       <td />
                     </tr>
                   ))}

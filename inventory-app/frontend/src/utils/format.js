@@ -17,6 +17,8 @@ export const pct = (value, digits = 1) =>
 
 export const ratioPct = (value) => (value === null || value === undefined ? "–" : `${(value * 100).toFixed(1)}%`);
 
+export const qty = (value) => Math.round(Number(value) * 1000) / 1000;
+
 export const date = (value) => (value ? new Date(value).toLocaleDateString() : "–");
 
 export const departmentName = (dept) =>

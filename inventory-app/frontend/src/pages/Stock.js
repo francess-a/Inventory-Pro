@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import hotelApi, { errorMessage } from "../services/hotelApi";
 import { money, num, label } from "../utils/format";
+import { useCanApprove } from "../utils/roles";
 
 const CATEGORIES = [
   "GROCERY", "VEGETABLE", "DAIRY", "PORK", "CHICKEN", "BEEF", "BIRDS", "MUTTON",
@@ -19,6 +20,7 @@ export default function Stock() {
   const [showAdd, setShowAdd] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const canApprove = useCanApprove();
 
   const load = useCallback(async () => {
     try {
@@ -115,14 +117,18 @@ export default function Stock() {
             <option key={c} value={c}>{label(c)}</option>
           ))}
         </select>
-        <button type="button" onClick={recalculate}>Recalculate levels &amp; ABC/XYZ</button>
-        <button type="button" className="primary" onClick={generatePurchaseOrders} disabled={reorderCount === 0}>
-          Create draft POs {selected.size ? `for ${selected.size} selected` : "for all reorder items"}
-        </button>
-        <button type="button" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "Add item"}</button>
+        {canApprove && (
+          <>
+            <button type="button" onClick={recalculate}>Recalculate levels &amp; ABC/XYZ</button>
+            <button type="button" className="primary" onClick={generatePurchaseOrders} disabled={reorderCount === 0}>
+              Create draft POs {selected.size ? `for ${selected.size} selected` : "for all reorder items"}
+            </button>
+            <button type="button" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "Add item"}</button>
+          </>
+        )}
       </div>
 
-      {showAdd && (
+      {canApprove && showAdd && (
         <form className="card form-grid" onSubmit={addItem}>
           <label>SKU<input required {...field("sku")} /></label>
           <label>Barcode<input required {...field("barcode")} /></label>
@@ -133,7 +139,7 @@ export default function Stock() {
             </select>
           </label>
           <label>Unit<input required placeholder="kg, ltr, pcs, pack" {...field("unitOfMeasure")} /></label>
-          <label>Pack size (order multiple)<input type="number" min="1" {...field("orderMultiple")} /></label>
+          <label>Pack size (order multiple)<input type="number" min="0.001" step="any" {...field("orderMultiple")} /></label>
           <label>Preferred vendor
             <select {...field("preferredVendorId")}>
               <option value="">—</option>
@@ -170,7 +176,7 @@ export default function Stock() {
             {visible.map((r) => (
               <tr key={r.itemId} className={selected.has(r.itemId) ? "selected" : ""}>
                 <td>
-                  {r.needsReorder && (
+                  {canApprove && r.needsReorder && (
                     <input type="checkbox" checked={selected.has(r.itemId)} onChange={() => toggle(r.itemId)} />
                   )}
                 </td>
@@ -179,9 +185,9 @@ export default function Stock() {
                   <div className="muted">{r.sku} · {label(r.category)}</div>
                 </td>
                 <td><span className={`badge ${r.status}`}>{label(r.status)}</span></td>
-                <td className="num">{num(r.centralOnHand, 0)} {r.unitOfMeasure}</td>
+                <td className="num">{num(r.centralOnHand, 3)} {r.unitOfMeasure}</td>
                 <td className="num">{money(r.centralValue)}</td>
-                <td className="num">{num(r.onOrder, 0)}</td>
+                <td className="num">{num(r.onOrder, 3)}</td>
                 <td className="num">{num(r.avgDailyUsage, 2)}</td>
                 <td className="num">{num(r.daysOfCover)}</td>
                 <td>{r.vendorName || "—"}</td>

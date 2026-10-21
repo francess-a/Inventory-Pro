@@ -19,6 +19,14 @@ const auth = (req, res, next) => {
   }
 };
 
+// Roles come from the auth service's user model: "user", "approver", "admin".
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user || !roles.includes(req.user.role)) {
+    return res.status(403).json({ message: `Requires role: ${roles.join(" or ")}` });
+  }
+  return next();
+};
+
 const userName = (req) => req.user?.name || req.user?.email || "unknown";
 
-module.exports = { auth, userName };
+module.exports = { auth, requireRole, userName };

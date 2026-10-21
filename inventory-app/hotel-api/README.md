@@ -94,13 +94,31 @@ afterwards.
 | Market | `GET /market/comparison`, `GET /market/items/:id/trend`, `POST /market/prices`, `POST /market/prices/import`, `POST /market/feed/sync` |
 | Reports | `GET /reports/dashboard`, `GET /reports/department-consumption?from=&to=` |
 
+## Roles
+
+Tokens from the auth service carry a role: `user`, `approver` or `admin`.
+
+| Action | `user` (store staff) | `approver` / `admin` |
+| --- | --- | --- |
+| View everything, raise requisitions, issue approved requisitions | ✓ | ✓ |
+| Create draft POs, post goods receipts, record waste and prices | ✓ | ✓ |
+| Approve/reject requisitions, send/cancel POs, direct purchases | | ✓ |
+| Add/edit items, vendors, departments; stock adjustments | | ✓ |
+| Recalculate levels, generate POs, sync market feed | | ✓ |
+
+The frontend hides the approver-only buttons from store staff, and the API returns 403 if they
+are called anyway.
+
+## Quantities
+
+All quantities are `Decimal(12, 3)`, so weighed and measured goods can be recorded exactly
+(for example 2.5 kg, or 0.75 ltr). Pack sizes (`orderMultiple`) can also be fractional, such as
+0.5 kg, and suggested order quantities are rounded up to them. Computed safety stock, reorder
+point and maximum are rounded up to whole units.
+
 ## Known limitations
 
-- Quantities are whole numbers (`Int`), as in the original schema. Items bought by weight
-  need a smaller unit (for example `g` instead of `kg`) until the quantity columns are
-  changed to `Decimal`.
-- Stock issued to an outlet is treated as consumed by that department: the expense is
-  booked at issue. Outlet stock balances are tracked, but outlet-level consumption and
-  closing counts are not.
-- No role-based permissions yet. Any logged-in user can approve requisitions and post
-  receipts.
+- Stock issued to an outlet is treated as consumed by that department: the expense is booked
+  at issue. Outlet stock balances are tracked, but outlet-level consumption and closing counts
+  are not.
+- Market prices are only as current as the receipts, quotes and feed you provide (see above).

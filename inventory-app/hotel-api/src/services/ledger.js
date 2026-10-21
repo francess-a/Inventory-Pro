@@ -7,6 +7,8 @@ const { conflict, notFound } = require("../lib/http");
 
 const D = (value) => new Prisma.Decimal(value);
 const round2 = (value) => D(value).toDecimalPlaces(2);
+// Quantities are Decimal(12, 3) in the database and plain numbers here, rounded to 3 places.
+const qty = (value) => Math.round(Number(value) * 1000) / 1000;
 
 // Locks the item's central stock row for the rest of the transaction.
 const lockCentral = async (tx, itemId) => {
@@ -19,7 +21,7 @@ const lockCentral = async (tx, itemId) => {
     rows = await tx.$queryRaw`
       SELECT "quantityOnHand" FROM "CentralStock" WHERE "itemId" = ${itemId}::uuid FOR UPDATE`;
   }
-  return { onHand: rows[0].quantityOnHand, costPrice: D(item.costPrice) };
+  return { onHand: qty(rows[0].quantityOnHand), costPrice: D(item.costPrice) };
 };
 
 const writeCentral = (tx, itemId, quantityOnHand, costPrice) =>
@@ -37,7 +39,7 @@ const log = (tx, data) => tx.inventoryTransaction.create({ data });
 const receiveIntoCentral = async (tx, { itemId, quantity, unitPrice, vendorId, referenceId, timestamp, remarks }) => {
   const { onHand, costPrice } = await lockCentral(tx, itemId);
   const price = D(unitPrice);
-  const closing = onHand + quantity;
+  const closing = qty(onHand + quantity);
   const newCost =
     onHand <= 0 ? price : round2(D(onHand).mul(costPrice).add(D(quantity).mul(price)).div(closing));
 
@@ -66,7 +68,7 @@ const issueFromCentral = async (tx, { itemId, quantity, type, destination, refer
   if (quantity > onHand) {
     throw conflict(`Insufficient central stock for item ${itemId}: requested ${quantity}, on hand ${onHand}`);
   }
-  const closing = onHand - quantity;
+  const closing = qty(onHand - quantity);
   const central = await writeCentral(tx, itemId, closing, costPrice);
   const value = round2(costPrice.mul(quantity));
   await log(tx, {
@@ -89,7 +91,7 @@ const issueFromCentral = async (tx, { itemId, quantity, type, destination, refer
 // Stock-count correction. Positive adds stock, negative removes it (at current cost).
 const adjustCentral = async (tx, { itemId, quantityChange, remarks }) => {
   const { onHand, costPrice } = await lockCentral(tx, itemId);
-  const closing = onHand + quantityChange;
+  const closing = qty(onHand + quantityChange);
   if (closing < 0) throw conflict(`Adjustment would make central stock negative (on hand ${onHand})`);
   const central = await writeCentral(tx, itemId, closing, costPrice);
   await log(tx, {
@@ -133,4 +135,4 @@ const wasteFromOutlet = async (tx, { itemId, outletDepartmentId, quantity, remar
   return { unitCost: costPrice, value, closingStock: onHand };
 };
 
-module.exports = { receiveIntoCentral, issueFromCentral, adjustCentral, wasteFromOutlet, D, round2 };
+module.exports = { receiveIntoCentral, issueFromCentral, adjustCentral, wasteFromOutlet, D, round2, qty };

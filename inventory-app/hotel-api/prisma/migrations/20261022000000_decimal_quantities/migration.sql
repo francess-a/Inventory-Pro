@@ -1,0 +1,31 @@
+-- AlterTable
+ALTER TABLE "Item" ALTER COLUMN "minStockLevel" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "maxStockLevel" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "reorderPoint" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "orderMultiple" SET DEFAULT 1,
+ALTER COLUMN "orderMultiple" SET DATA TYPE DECIMAL(12,3);
+
+-- AlterTable
+ALTER TABLE "PurchaseOrderItem" ALTER COLUMN "quantityOrdered" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "quantityReceived" SET DEFAULT 0,
+ALTER COLUMN "quantityReceived" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "quantityRejected" SET DEFAULT 0,
+ALTER COLUMN "quantityRejected" SET DATA TYPE DECIMAL(12,3);
+
+-- AlterTable
+ALTER TABLE "CentralStock" ALTER COLUMN "quantityOnHand" SET DEFAULT 0,
+ALTER COLUMN "quantityOnHand" SET DATA TYPE DECIMAL(12,3);
+
+-- AlterTable
+ALTER TABLE "OutletStock" ALTER COLUMN "quantityOnHand" SET DEFAULT 0,
+ALTER COLUMN "quantityOnHand" SET DATA TYPE DECIMAL(12,3);
+
+-- AlterTable
+ALTER TABLE "RequisitionItem" ALTER COLUMN "quantityRequested" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "quantityIssued" SET DEFAULT 0,
+ALTER COLUMN "quantityIssued" SET DATA TYPE DECIMAL(12,3);
+
+-- AlterTable
+ALTER TABLE "InventoryTransaction" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(12,3),
+ALTER COLUMN "closingStockCentral" SET DATA TYPE DECIMAL(12,3);
+

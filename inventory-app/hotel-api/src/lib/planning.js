@@ -24,7 +24,7 @@ const dailyDemandSeries = (movements, days, endDate = new Date()) => {
     const t = new Date(timestamp).getTime();
     if (t <= start || t > end) continue;
     const index = Math.min(days - 1, Math.floor((t - start) / DAY_MS));
-    series[index] += quantity;
+    series[index] += Number(quantity);
   }
   return series;
 };
@@ -39,9 +39,10 @@ const weeklyTotals = (dailySeries) => {
   return weeks;
 };
 
+// Rounds up to the pack size; supports fractional packs (e.g. 0.5 kg) and returns 3 decimals.
 const roundUpToMultiple = (quantity, multiple) => {
-  const m = Math.max(1, Math.floor(multiple || 1));
-  return Math.ceil(quantity / m) * m;
+  const m = multiple > 0 ? multiple : 1;
+  return Math.round(Math.ceil(quantity / m - 1e-9) * m * 1000) / 1000;
 };
 
 /**
@@ -80,7 +81,7 @@ const computeStockLevels = ({
 };
 
 const suggestOrder = ({ onHand, onOrder, reorderPoint, maxStock, orderMultiple = 1 }) => {
-  const position = onHand + onOrder;
+  const position = Math.round((onHand + onOrder) * 1000) / 1000;
   if (position > reorderPoint || maxStock <= position) {
     return { stockPosition: position, needsReorder: false, suggestedOrderQty: 0 };
   }

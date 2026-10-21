@@ -77,10 +77,10 @@ const buildPlan = async ({ now = new Date() } = {}) => {
     const useComputed = item.autoPlanning && itemMovements.length > 0;
     const levels = useComputed
       ? { minStock: computed.safetyStock, reorderPoint: computed.reorderPoint, maxStock: computed.maxStock }
-      : { minStock: item.minStockLevel, reorderPoint: item.reorderPoint, maxStock: item.maxStockLevel };
-    const onHand = item.centralStock?.quantityOnHand ?? 0;
+      : { minStock: Number(item.minStockLevel), reorderPoint: Number(item.reorderPoint), maxStock: Number(item.maxStockLevel) };
+    const onHand = Number(item.centralStock?.quantityOnHand ?? 0);
     const qtyOnOrder = onOrder.get(item.id) ?? 0;
-    const order = suggestOrder({ onHand, onOrder: qtyOnOrder, ...levels, orderMultiple: item.orderMultiple });
+    const order = suggestOrder({ onHand, onOrder: qtyOnOrder, ...levels, orderMultiple: Number(item.orderMultiple) });
     const consumptionValue = itemMovements.reduce((sum, m) => sum + Number(m.transactionValue), 0);
     const xyz = classifyXyz(weeklyTotals(dailyDemand));
 
@@ -93,7 +93,7 @@ const buildPlan = async ({ now = new Date() } = {}) => {
       costPrice: Number(item.costPrice),
       centralOnHand: onHand,
       centralValue: Number(item.centralStock?.totalValue ?? 0),
-      outletOnHand: item.outletStocks.reduce((sum, s) => sum + s.quantityOnHand, 0),
+      outletOnHand: Math.round(item.outletStocks.reduce((sum, s) => sum + Number(s.quantityOnHand), 0) * 1000) / 1000,
       onOrder: qtyOnOrder,
       avgDailyUsage: Math.round(computed.avgDailyUsage * 100) / 100,
       demandStdDev: Math.round(computed.demandStdDev * 100) / 100,
@@ -113,7 +113,7 @@ const buildPlan = async ({ now = new Date() } = {}) => {
       xyzCategory: xyz.category,
       coefficientOfVariation: xyz.coefficientOfVariation === null ? null : Math.round(xyz.coefficientOfVariation * 100) / 100,
       autoPlanning: item.autoPlanning,
-      orderMultiple: item.orderMultiple,
+      orderMultiple: Number(item.orderMultiple),
     };
   });
 

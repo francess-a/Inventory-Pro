@@ -129,3 +129,11 @@ test("vendor scorecard with no deliveries has no score", () => {
   assert.equal(priceScore(0.9), 100);
   assert.equal(priceScore(1.5), 0);
 });
+
+test("roundUpToMultiple supports fractional pack sizes", () => {
+  assert.equal(p.roundUpToMultiple(2.1, 0.5), 2.5);
+  assert.equal(p.roundUpToMultiple(2.5, 0.5), 2.5);
+  assert.equal(p.roundUpToMultiple(0.7, 0.25), 0.75);
+  assert.equal(p.roundUpToMultiple(7, 0), 7);
+  assert.equal(p.suggestOrder({ onHand: 1.2, onOrder: 0.3, reorderPoint: 2, maxStock: 4, orderMultiple: 0.5 }).suggestedOrderQty, 2.5);
+});

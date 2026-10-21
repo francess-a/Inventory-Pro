@@ -17,7 +17,7 @@ export default function NavBar() {
 
   return (
     <nav className="nav-bar">
-      <div className="nav-brand">Inventory App</div>
+      <div className="nav-brand">Hotel Central Store</div>
       <div className="nav-links">
         <NavLink to="/">Dashboard</NavLink>
         <NavLink to="/stock">Stock</NavLink>
@@ -25,9 +25,6 @@ export default function NavBar() {
         <NavLink to="/requisitions">Requisitions</NavLink>
         <NavLink to="/vendors">Vendors</NavLink>
         <NavLink to="/market">Market Prices</NavLink>
-        <NavLink to="/items">Items</NavLink>
-        <NavLink to="/indents">Indents</NavLink>
-        <NavLink to="/reports">Reports</NavLink>
       </div>
       <div className="nav-actions">
         {user ? (

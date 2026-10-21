@@ -1,8 +1,8 @@
 const crypto = require("crypto");
 const prisma = require("../db");
-const { badRequest, conflict, notFound, uuid, int, money, text, date, nonEmptyArray } = require("../lib/http");
+const { badRequest, conflict, notFound, uuid, quantity, money, text, date, nonEmptyArray } = require("../lib/http");
 const { DAY_MS } = require("../lib/planning");
-const { receiveIntoCentral, D, round2 } = require("./ledger");
+const { receiveIntoCentral, D, round2, qty } = require("./ledger");
 
 const PO_INCLUDE = {
   vendor: { select: { id: true, vendorName: true, leadTimeDays: true } },
@@ -25,7 +25,7 @@ const withTotals = (po) => {
 const parseLines = (lines) =>
   nonEmptyArray(lines, "items").map((line, i) => ({
     itemId: uuid(line.itemId, `items[${i}].itemId`),
-    quantityOrdered: int(line.quantityOrdered ?? line.quantity, `items[${i}].quantityOrdered`, { min: 1 }),
+    quantityOrdered: quantity(line.quantityOrdered ?? line.quantity, `items[${i}].quantityOrdered`, { positive: true }),
     unitPrice: money(line.unitPrice, `items[${i}].unitPrice`),
   }));
 
@@ -80,12 +80,12 @@ const receiveInTx = async (tx, id, body) => {
     const lineId = uuid(raw.poItemId, `lines[${i}].poItemId`);
     const line = po.items.find((l) => l.id === lineId);
     if (!line) throw badRequest(`lines[${i}].poItemId does not belong to this order`);
-    const accepted = int(raw.quantityReceived ?? 0, `lines[${i}].quantityReceived`);
-    const rejected = int(raw.quantityRejected ?? 0, `lines[${i}].quantityRejected`);
+    const accepted = quantity(raw.quantityReceived ?? 0, `lines[${i}].quantityReceived`);
+    const rejected = quantity(raw.quantityRejected ?? 0, `lines[${i}].quantityRejected`);
     if (accepted + rejected === 0) continue;
-    const outstanding = line.quantityOrdered - line.quantityReceived - line.quantityRejected;
-    if (accepted + rejected > outstanding) {
-      throw badRequest(`lines[${i}]: received + rejected (${accepted + rejected}) exceeds outstanding ${outstanding}`);
+    const outstanding = qty(Number(line.quantityOrdered) - Number(line.quantityReceived) - Number(line.quantityRejected));
+    if (qty(accepted + rejected) > outstanding) {
+      throw badRequest(`lines[${i}]: received + rejected (${qty(accepted + rejected)}) exceeds outstanding ${outstanding}`);
     }
     const unitPrice = money(raw.unitPrice, `lines[${i}].unitPrice`, { optional: true }) ?? D(line.unitPrice);
     const rejectionReason = text(raw.rejectionReason, `lines[${i}].rejectionReason`, { optional: true });
@@ -124,7 +124,9 @@ const receiveInTx = async (tx, id, body) => {
     }
   }
 
-  const complete = po.items.every((l) => l.quantityReceived + l.quantityRejected >= l.quantityOrdered);
+  const complete = po.items.every(
+    (l) => qty(Number(l.quantityReceived) + Number(l.quantityRejected)) >= Number(l.quantityOrdered)
+  );
   return tx.purchaseOrder.update({
     where: { id },
     data: {
@@ -189,7 +191,7 @@ const createDirectPurchase = async (body) =>
           const rejected = Number(rawLines[i].quantityRejected ?? 0);
           return {
             poItemId: line.id,
-            quantityReceived: line.quantityOrdered - rejected,
+            quantityReceived: qty(Number(line.quantityOrdered) - rejected),
             quantityRejected: rejected,
             rejectionReason: rawLines[i].rejectionReason,
           };
@@ -206,8 +208,8 @@ const openOrderQuantities = async () => {
   });
   const onOrder = new Map();
   for (const l of lines) {
-    const outstanding = Math.max(0, l.quantityOrdered - l.quantityReceived - l.quantityRejected);
-    onOrder.set(l.itemId, (onOrder.get(l.itemId) ?? 0) + outstanding);
+    const outstanding = Math.max(0, Number(l.quantityOrdered) - Number(l.quantityReceived) - Number(l.quantityRejected));
+    onOrder.set(l.itemId, qty((onOrder.get(l.itemId) ?? 0) + outstanding));
   }
   return onOrder;
 };

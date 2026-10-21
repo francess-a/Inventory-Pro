@@ -97,7 +97,7 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(po.status, "PARTIALLY_RECEIVED");
     assert.ok(po.receivedAt);
     const afterFirst = await central(onion.id);
-    assert.equal(afterFirst.quantityOnHand, 50);
+    assert.equal(Number(afterFirst.quantityOnHand), 50);
     assert.equal(afterFirst.totalValue, "2000");
 
     const over = await call("POST", `/purchase-orders/${po.id}/receive`, {
@@ -113,7 +113,7 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(po.status, "RECEIVED");
     const item = await ok("GET", `/items/${onion.id}`);
     assert.equal(item.costPrice, "44"); // (50*40 + 40*49) / 90 = 44
-    assert.equal(item.centralStock.quantityOnHand, 90);
+    assert.equal(Number(item.centralStock.quantityOnHand), 90);
     assert.equal(item.centralStock.totalValue, "3960");
   });
 
@@ -130,8 +130,8 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       items: [{ itemId: rice.id, quantityOrdered: 20, unitPrice: 80, quantityRejected: 2, rejectionReason: "Torn bag" }],
     });
     assert.equal(direct.status, "RECEIVED");
-    assert.equal(direct.items[0].quantityReceived, 18);
-    assert.equal((await central(rice.id)).quantityOnHand, 68);
+    assert.equal(Number(direct.items[0].quantityReceived), 18);
+    assert.equal(Number((await central(rice.id)).quantityOnHand), 68);
   });
 
   // ── Requisitions & issues ────────────────────────────────────
@@ -158,16 +158,16 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     });
     assert.equal(req.status, "ISSUED");
     const issuedOnion = req.items.find((l) => l.itemId === onion.id);
-    assert.equal(issuedOnion.quantityIssued, 25);
+    assert.equal(Number(issuedOnion.quantityIssued), 25);
     assert.equal(issuedOnion.unitCost, "44");
     assert.equal(issuedOnion.issuedValue, "1100");
-    assert.equal((await central(onion.id)).quantityOnHand, 65);
+    assert.equal(Number((await central(onion.id)).quantityOnHand), 65);
 
     const outlet = await ok("GET", `/stock/outlets?outletDepartmentId=${kitchen.id}`);
-    assert.equal(outlet.find((s) => s.itemId === onion.id).quantityOnHand, 25);
+    assert.equal(Number(outlet.find((s) => s.itemId === onion.id).quantityOnHand), 25);
 
     const tx = await ok("GET", `/transactions?itemId=${onion.id}&type=OUTLET_ISSUE`);
-    assert.equal(tx[0].closingStockCentral, 65);
+    assert.equal(Number(tx[0].closingStockCentral), 65);
     assert.equal(tx[0].closingStockCentralValue, "2860");
     assert.equal(tx[0].destinationLocation, kitchen.id);
   });
@@ -181,29 +181,59 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       ],
     });
     req = await ok("POST", `/requisitions/${req.id}/approve`);
-    const before = (await central(rice.id)).quantityOnHand;
+    const before = Number((await central(rice.id)).quantityOnHand);
     assert.equal((await call("POST", `/requisitions/${req.id}/issue`, {})).status, 409);
-    assert.equal((await central(rice.id)).quantityOnHand, before);
+    assert.equal(Number((await central(rice.id)).quantityOnHand), before);
     assert.equal((await ok("GET", `/requisitions/${req.id}`)).status, "APPROVED");
   });
 
   await t.test("waste and stock adjustments", async () => {
     await ok("POST", "/stock/waste", { itemId: onion.id, quantity: 5, reason: "Spoiled" });
-    assert.equal((await central(onion.id)).quantityOnHand, 60);
+    assert.equal(Number((await central(onion.id)).quantityOnHand), 60);
     await ok("POST", "/stock/waste", { itemId: onion.id, quantity: 5, location: kitchen.id, reason: "Burnt" });
     const outlet = await ok("GET", `/stock/outlets?outletDepartmentId=${kitchen.id}`);
-    assert.equal(outlet.find((s) => s.itemId === onion.id).quantityOnHand, 20);
+    assert.equal(Number(outlet.find((s) => s.itemId === onion.id).quantityOnHand), 20);
     assert.equal((await call("POST", "/stock/waste", { itemId: onion.id, quantity: 500, location: kitchen.id, reason: "x" })).status, 409);
     await ok("POST", "/stock/adjustments", { itemId: onion.id, quantityChange: -2, reason: "Count variance" });
-    assert.equal((await central(onion.id)).quantityOnHand, 58);
+    assert.equal(Number((await central(onion.id)).quantityOnHand), 58);
     assert.equal((await call("POST", "/stock/adjustments", { itemId: onion.id, quantityChange: -100, reason: "x" })).status, 409);
+  });
+
+  await t.test("fractional quantities for weighed goods", async () => {
+    const butter = await ok("POST", "/items", {
+      sku: "BUT", barcode: "333", itemName: "Butter", category: "DAIRY", unitOfMeasure: "kg", orderMultiple: 0.5,
+    });
+    await ok("POST", "/purchase-orders/direct", {
+      vendorId: metro.id,
+      items: [{ itemId: butter.id, quantityOrdered: 2.5, unitPrice: 500 }],
+    });
+    assert.equal((await central(butter.id)).quantityOnHand, "2.5");
+    assert.equal((await central(butter.id)).totalValue, "1250");
+
+    let req = await ok("POST", "/requisitions", {
+      outletDepartmentId: kitchen.id,
+      items: [{ itemId: butter.id, quantityRequested: 0.75 }],
+    });
+    req = await ok("POST", `/requisitions/${req.id}/approve`);
+    req = await ok("POST", `/requisitions/${req.id}/issue`, {});
+    assert.equal(req.items[0].quantityIssued, "0.75");
+    assert.equal(req.items[0].issuedValue, "375");
+    assert.equal((await central(butter.id)).quantityOnHand, "1.75");
+
+    const tooPrecise = await call("POST", "/requisitions", {
+      outletDepartmentId: kitchen.id,
+      items: [{ itemId: butter.id, quantityRequested: 1.2345 }],
+    });
+    assert.equal(tooPrecise.status, 400);
+    await ok("POST", "/stock/waste", { itemId: butter.id, quantity: 0.25, reason: "Melted" });
+    assert.equal((await central(butter.id)).quantityOnHand, "1.5");
   });
 
   await t.test("department consumption report", async () => {
     const report = await ok("GET", "/reports/department-consumption");
     assert.equal(report.departments.length, 1);
-    // 25 kg onion @ 44 + 10 kg rice @ 87.35 ((50*90 + 18*80) / 68)
-    assert.equal(report.departments[0].totalValue, "1973.5");
+    // 25 kg onion @ 44 + 10 kg rice @ 87.35 ((50*90 + 18*80) / 68) + 0.75 kg butter @ 500
+    assert.equal(report.departments[0].totalValue, "2348.5");
   });
 
   // ── Vendor scorecards ────────────────────────────────────────
@@ -273,9 +303,9 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     if (row.needsReorder) assert.equal(row.suggestedOrderQty % 5, 0, "rounded to orderMultiple");
 
     const result = await ok("POST", "/replenishment/recalculate");
-    assert.equal(result.itemsUpdated, 2);
+    assert.equal(result.itemsUpdated, 3);
     const updated = await ok("GET", `/items/${onion.id}`);
-    assert.equal(updated.reorderPoint, row.reorderPoint);
+    assert.equal(Number(updated.reorderPoint), row.reorderPoint);
     assert.equal(updated.abcCategory, "A");
 
     // Manually maintained levels: with autoPlanning off, the stored levels drive the order.
@@ -288,23 +318,47 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     const draft = generated.created[0];
     assert.equal(draft.status, "DRAFT");
     assert.equal(draft.vendorId, metro.id);
-    assert.equal(draft.items[0].quantityOrdered, 800 - (await central(rice.id)).quantityOnHand);
+    assert.equal(Number(draft.items[0].quantityOrdered), 800 - Number((await central(rice.id)).quantityOnHand));
   });
 
   await t.test("dashboard summary", async () => {
     const dash = await ok("GET", "/reports/dashboard");
-    assert.equal(dash.itemCount, 2);
+    assert.equal(dash.itemCount, 3);
     assert.ok(dash.centralStockValue > 0);
   });
 
-  await t.test("auth is enforced when enabled", async () => {
+  await t.test("auth and roles are enforced when enabled", async () => {
     config.authDisabled = false;
+    const jwt = require("jsonwebtoken");
+    const as = (role) => async (method, url, body) => {
+      const token = jwt.sign({ name: `${role} user`, role }, config.jwtSecret);
+      const res = await fetch(base + url, {
+        method,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, body: await res.json() };
+    };
+    const staff = as("user");
+    const approverUser = as("approver");
     try {
       assert.equal((await call("GET", "/items")).status, 401);
-      const jwt = require("jsonwebtoken");
-      const token = jwt.sign({ name: "Store Manager", role: "admin" }, config.jwtSecret);
-      const res = await fetch(`${base}/items`, { headers: { Authorization: `Bearer ${token}` } });
-      assert.equal(res.status, 200);
+      assert.equal((await staff("GET", "/items")).status, 200);
+
+      // Store staff can raise a requisition but not approve it.
+      const req = await staff("POST", "/requisitions", { outletDepartmentId: kitchen.id, items: [{ itemId: rice.id, quantity: 1 }] });
+      assert.equal(req.status, 201);
+      assert.equal(req.body.requestedBy, "user user");
+      assert.equal((await staff("POST", `/requisitions/${req.body.id}/approve`)).status, 403);
+      const approved = await approverUser("POST", `/requisitions/${req.body.id}/approve`);
+      assert.equal(approved.status, 200);
+      assert.equal(approved.body.approvedBy, "approver user");
+      assert.equal((await staff("POST", `/requisitions/${req.body.id}/issue`, {})).status, 200);
+
+      // Master data, stock corrections and direct purchases need an approver.
+      assert.equal((await staff("POST", "/stock/adjustments", { itemId: rice.id, quantityChange: 1, reason: "x" })).status, 403);
+      assert.equal((await staff("POST", "/vendors", { vendorName: "X" })).status, 403);
+      assert.equal((await staff("POST", "/replenishment/recalculate")).status, 403);
     } finally {
       config.authDisabled = true;
     }

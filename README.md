@@ -16,6 +16,18 @@ This repository contains a **production‑ready inventory management system** wi
 
 ---
 
+## Hotel Central Store module
+
+`inventory-app/hotel-api` is a PostgreSQL-backed service for running a hotel's central
+warehouse: purchases from multiple suppliers, department requisitions and issues with values,
+automatic safety stock, reorder points, maximum stock and order quantities, vendor
+scorecards, and market price trends. The React app's Dashboard, Stock, Purchases,
+Requisitions, Vendors and Market Prices pages use it. Login still goes through the
+existing auth service in `inventory-app/backend`.
+
+Quick start: `docker compose up`, or see [`inventory-app/hotel-api/README.md`](inventory-app/hotel-api/README.md)
+for local setup, the formulas used, roles and the API reference.
+
 ## Architecture
 
 ```mermaid

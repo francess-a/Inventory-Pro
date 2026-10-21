@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import hotelApi, { errorMessage } from "../services/hotelApi";
 import { money, pct, date, label } from "../utils/format";
+import { useCanApprove } from "../utils/roles";
 
 const COLORS = ["#3538cd", "#e04f16", "#079455", "#c11574", "#0086c9", "#ca8504", "#6938ef", "#475467"];
 const Change = ({ value }) =>
@@ -122,6 +123,7 @@ function Trend({ itemId }) {
 }
 
 export default function MarketPrices() {
+  const canApprove = useCanApprove();
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -162,9 +164,11 @@ export default function MarketPrices() {
       </p>
       {error && <p className="error" onClick={() => setError("")}>{error}</p>}
       {message && <p className="notice">{message}</p>}
-      <div className="toolbar">
-        <button type="button" onClick={syncFeed}>Sync market feed now</button>
-      </div>
+      {canApprove && (
+        <div className="toolbar">
+          <button type="button" onClick={syncFeed}>Sync market feed now</button>
+        </div>
+      )}
       <PriceEntry items={rows} vendors={vendors} onError={setError} onSaved={() => { setMessage("Price recorded."); load(); }} />
 
       <div className="split">

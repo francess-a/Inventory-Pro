@@ -1,9 +1,6 @@
 import React from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
-import Items from "./pages/Items";
-import Indents from "./pages/Indents";
-import Reports from "./pages/Reports";
 import Login from "./pages/Login";
 import Stock from "./pages/Stock";
 import Purchases from "./pages/Purchases";
@@ -24,30 +21,6 @@ function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/items"
-          element={
-            <ProtectedRoute>
-              <Items />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/indents"
-          element={
-            <ProtectedRoute>
-              <Indents />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            <ProtectedRoute>
-              <Reports />
             </ProtectedRoute>
           }
         />
@@ -91,6 +64,10 @@ function App() {
             </ProtectedRoute>
           }
         />
+        {/* Superseded pages of the original app: items -> stock, indents & usage reports -> requisitions. */}
+        <Route path="/items" element={<Navigate to="/stock" replace />} />
+        <Route path="/indents" element={<Navigate to="/requisitions" replace />} />
+        <Route path="/reports" element={<Navigate to="/requisitions" replace />} />
       </Routes>
     </BrowserRouter>
   );

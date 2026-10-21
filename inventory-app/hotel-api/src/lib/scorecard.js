@@ -44,11 +44,11 @@ const computeScorecard = ({ purchaseOrders, promisedLeadTimeDays, marketAverages
   let benchmarkSpend = 0;
   for (const po of delivered) {
     for (const line of po.items) {
-      ordered += line.quantityOrdered;
-      received += line.quantityReceived;
-      rejected += line.quantityRejected;
+      ordered += Number(line.quantityOrdered);
+      received += Number(line.quantityReceived);
+      rejected += Number(line.quantityRejected);
       const benchmark = marketAverages.get(line.itemId);
-      const qty = line.quantityReceived || line.quantityOrdered;
+      const qty = Number(line.quantityReceived) || Number(line.quantityOrdered);
       if (benchmark && qty > 0) {
         vendorSpend += Number(line.unitPrice) * qty;
         benchmarkSpend += benchmark * qty;

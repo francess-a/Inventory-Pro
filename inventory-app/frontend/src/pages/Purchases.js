@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useState } from "react";
 import hotelApi, { errorMessage } from "../services/hotelApi";
-import { money, date, label } from "../utils/format";
+import { money, date, label, qty } from "../utils/format";
+import { useCanApprove } from "../utils/roles";
 
 const STATUSES = ["DRAFT", "SENT", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"];
 const emptyLine = () => ({ itemId: "", quantityOrdered: "", unitPrice: "" });
 
 function NewPurchase({ vendors, items, onCreated, onError }) {
+  const canApprove = useCanApprove();
   const [vendorId, setVendorId] = useState("");
   const [lines, setLines] = useState([emptyLine()]);
   const [direct, setDirect] = useState(false);
@@ -46,13 +48,15 @@ function NewPurchase({ vendors, items, onCreated, onError }) {
             ))}
           </select>
         </label>
-        <label>
-          <span>
-            <input type="checkbox" checked={direct} onChange={(e) => setDirect(e.target.checked)} /> Direct purchase (goods
-            received now, no PO)
-          </span>
-          {direct && <input placeholder="Invoice / bill number" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />}
-        </label>
+        {canApprove && (
+          <label>
+            <span>
+              <input type="checkbox" checked={direct} onChange={(e) => setDirect(e.target.checked)} /> Direct purchase (goods
+              received now, no PO)
+            </span>
+            {direct && <input placeholder="Invoice / bill number" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />}
+          </label>
+        )}
       </div>
       {lines.map((line, i) => (
         <div className="line-row" key={i}>
@@ -67,7 +71,7 @@ function NewPurchase({ vendors, items, onCreated, onError }) {
           </label>
           <label>
             Quantity
-            <input type="number" min="1" required value={line.quantityOrdered} onChange={(e) => setLine(i, { quantityOrdered: e.target.value })} />
+            <input type="number" min="0" step="any" required value={line.quantityOrdered} onChange={(e) => setLine(i, { quantityOrdered: e.target.value })} />
           </label>
           <label>
             Unit price
@@ -92,8 +96,8 @@ function ReceiveForm({ po, onDone, onError }) {
   const [lines, setLines] = useState(
     po.items.map((l) => ({
       poItemId: l.id,
-      outstanding: l.quantityOrdered - l.quantityReceived - l.quantityRejected,
-      quantityReceived: l.quantityOrdered - l.quantityReceived - l.quantityRejected,
+      outstanding: qty(Number(l.quantityOrdered) - Number(l.quantityReceived) - Number(l.quantityRejected)),
+      quantityReceived: qty(Number(l.quantityOrdered) - Number(l.quantityReceived) - Number(l.quantityRejected)),
       quantityRejected: 0,
       rejectionReason: "",
       unitPrice: Number(l.unitPrice),
@@ -135,8 +139,8 @@ function ReceiveForm({ po, onDone, onError }) {
             <tr key={item.id}>
               <td>{item.item.itemName}</td>
               <td className="num">{lines[i].outstanding} {item.item.unitOfMeasure}</td>
-              <td><input type="number" min="0" style={{ width: 90 }} value={lines[i].quantityReceived} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { quantityReceived: e.target.value })} /></td>
-              <td><input type="number" min="0" style={{ width: 90 }} value={lines[i].quantityRejected} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { quantityRejected: e.target.value })} /></td>
+              <td><input type="number" min="0" step="any" style={{ width: 90 }} value={lines[i].quantityReceived} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { quantityReceived: e.target.value })} /></td>
+              <td><input type="number" min="0" step="any" style={{ width: 90 }} value={lines[i].quantityRejected} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { quantityRejected: e.target.value })} /></td>
               <td><input value={lines[i].rejectionReason} disabled={!Number(lines[i].quantityRejected)} onChange={(e) => setLine(i, { rejectionReason: e.target.value })} /></td>
               <td><input type="number" min="0" step="0.01" style={{ width: 100 }} value={lines[i].unitPrice} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { unitPrice: e.target.value })} /></td>
             </tr>
@@ -153,6 +157,7 @@ function ReceiveForm({ po, onDone, onError }) {
 }
 
 export default function Purchases() {
+  const canApprove = useCanApprove();
   const [orders, setOrders] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [items, setItems] = useState([]);
@@ -263,11 +268,11 @@ export default function Purchases() {
                   <td className="num">{money(po.orderedValue)}</td>
                   <td className="num">{money(po.receivedValue)}</td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {po.status === "DRAFT" && <button type="button" className="link" onClick={() => act(po, "send")}>Send</button>}
+                    {canApprove && po.status === "DRAFT" && <button type="button" className="link" onClick={() => act(po, "send")}>Send</button>}
                     {["SENT", "PARTIALLY_RECEIVED"].includes(po.status) && (
                       <button type="button" className="link" onClick={() => setReceiving(po)}>Receive</button>
                     )}
-                    {["DRAFT", "SENT"].includes(po.status) && (
+                    {canApprove && ["DRAFT", "SENT"].includes(po.status) && (
                       <button type="button" className="link" onClick={() => act(po, "cancel")}>Cancel</button>
                     )}
                   </td>
@@ -283,7 +288,7 @@ export default function Purchases() {
                       </td>
                       <td />
                       <td className="num">{money(l.unitPrice)} / {l.item.unitOfMeasure}</td>
-                      <td className="num">{money(Number(l.unitPrice) * l.quantityReceived)}</td>
+                      <td className="num">{money(Number(l.unitPrice) * Number(l.quantityReceived))}</td>
                       <td />
                     </tr>
                   ))}

@@ -1,5 +1,6 @@
 // Prisma schema for the hotel centralized warehouse inventory management system.
 // Database: PostgreSQL
+// Quantities are Decimal(12, 3) so weighed and measured goods (2.5 kg, 0.75 ltr) can be recorded.
 
 generator client {
   provider = "prisma-client-js"
@@ -104,9 +105,9 @@ model Item {
   category      ItemCategory
   costPrice     Decimal      @db.Decimal(12, 2) // weighted average cost, updated on every receipt
   unitOfMeasure String // e.g. kg, ltr, pcs, pack
-  minStockLevel Int // safety stock
-  maxStockLevel Int
-  reorderPoint  Int
+  minStockLevel Decimal      @db.Decimal(12, 3) // safety stock
+  maxStockLevel Decimal      @db.Decimal(12, 3)
+  reorderPoint  Decimal      @db.Decimal(12, 3)
 
   // Classifications are computed by the application (consumption value / demand
   // variability analysis), so they stay null until the first analysis run.
@@ -116,7 +117,7 @@ model Item {
   // When true, the replenishment engine overwrites min/max/reorder point from
   // consumption history. Set to false to keep manually maintained levels.
   autoPlanning      Boolean @default(true)
-  orderMultiple     Int     @default(1) // suggested order quantities are rounded up to this pack size
+  orderMultiple     Decimal @default(1) @db.Decimal(12, 3) // suggested order quantities are rounded up to this pack size
   preferredVendorId String? @db.Uuid
   isActive          Boolean @default(true)
 
@@ -168,9 +169,9 @@ model PurchaseOrderItem {
   id               String  @id @default(uuid()) @db.Uuid
   poId             String  @db.Uuid
   itemId           String  @db.Uuid
-  quantityOrdered  Int
-  quantityReceived Int     @default(0)
-  quantityRejected Int     @default(0)
+  quantityOrdered  Decimal @db.Decimal(12, 3)
+  quantityReceived Decimal @default(0) @db.Decimal(12, 3)
+  quantityRejected Decimal @default(0) @db.Decimal(12, 3)
   rejectionReason  String?
   unitPrice        Decimal @db.Decimal(12, 2)
 
@@ -195,17 +196,17 @@ model OutletDepartment {
 model CentralStock {
   id             String  @id @default(uuid()) @db.Uuid
   itemId         String  @unique @db.Uuid
-  quantityOnHand Int     @default(0)
+  quantityOnHand Decimal @default(0) @db.Decimal(12, 3)
   totalValue     Decimal @default(0) @db.Decimal(14, 2) // quantityOnHand * costPrice
 
   item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
 }
 
 model OutletStock {
-  id                 String @id @default(uuid()) @db.Uuid
-  outletDepartmentId String @db.Uuid
-  itemId             String @db.Uuid
-  quantityOnHand     Int    @default(0)
+  id                 String  @id @default(uuid()) @db.Uuid
+  outletDepartmentId String  @db.Uuid
+  itemId             String  @db.Uuid
+  quantityOnHand     Decimal @default(0) @db.Decimal(12, 3)
 
   item       Item             @relation(fields: [itemId], references: [id], onDelete: Cascade)
   department OutletDepartment @relation(fields: [outletDepartmentId], references: [id], onDelete: Cascade)
@@ -238,8 +239,8 @@ model RequisitionItem {
   id                String   @id @default(uuid()) @db.Uuid
   requisitionId     String   @db.Uuid
   itemId            String   @db.Uuid
-  quantityRequested Int
-  quantityIssued    Int      @default(0)
+  quantityRequested Decimal  @db.Decimal(12, 3)
+  quantityIssued    Decimal  @default(0) @db.Decimal(12, 3)
   unitCost          Decimal? @db.Decimal(12, 2) // weighted average cost at the moment of issue
   issuedValue       Decimal  @default(0) @db.Decimal(14, 2)
 
@@ -256,10 +257,10 @@ model InventoryTransaction {
   type                     TransactionType
   sourceLocation           String // 'CENTRAL', 'VENDOR:<uuid>' or OutletDepartment UUID
   destinationLocation      String // 'CENTRAL', OutletDepartment UUID or 'WASTE_BIN'
-  quantity                 Int
+  quantity                 Decimal         @db.Decimal(12, 3)
   unitCost                 Decimal         @db.Decimal(12, 2)
   transactionValue         Decimal         @db.Decimal(14, 2)
-  closingStockCentral      Int
+  closingStockCentral      Decimal         @db.Decimal(12, 3)
   closingStockCentralValue Decimal         @db.Decimal(14, 2)
   referenceId              String? // PurchaseOrder / Requisition id that caused the movement
   remarks                  String?

@@ -28,6 +28,21 @@ const int = (value, name, { min = 0, optional = false } = {}) => {
   return n;
 };
 
+// Quantities allow up to 3 decimals (kg, ltr). `positive` rejects 0; `signed` allows negatives.
+const quantity = (value, name, { optional = false, positive = false, signed = false } = {}) => {
+  if (value === undefined || value === null || value === "") {
+    if (optional) return undefined;
+    throw badRequest(`${name} is required`);
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || (!signed && n < 0) || (positive && n <= 0)) {
+    const kind = positive ? "a positive number" : signed ? "a number" : "a non-negative number";
+    throw badRequest(`${name} must be ${kind}`);
+  }
+  if (Math.abs(Math.round(n * 1000) - n * 1000) > 1e-6) throw badRequest(`${name} allows at most 3 decimal places`);
+  return Math.round(n * 1000) / 1000;
+};
+
 const money = (value, name, { optional = false } = {}) => {
   if (value === undefined || value === null || value === "") {
     if (optional) return undefined;
@@ -92,6 +107,7 @@ module.exports = {
   conflict,
   uuid,
   int,
+  quantity,
   money,
   text,
   oneOf,

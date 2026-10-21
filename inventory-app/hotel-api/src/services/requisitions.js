@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const prisma = require("../db");
-const { badRequest, conflict, notFound, uuid, int, text, date, nonEmptyArray } = require("../lib/http");
-const { issueFromCentral, D, round2 } = require("./ledger");
+const { badRequest, conflict, notFound, uuid, quantity: parseQuantity, text, date, nonEmptyArray } = require("../lib/http");
+const { issueFromCentral, D, round2, qty } = require("./ledger");
 
 const REQ_INCLUDE = {
   department: true,
@@ -47,7 +47,7 @@ const createRequisition = async (body, requestedByDefault) => {
   const outletDepartmentId = uuid(body.outletDepartmentId, "outletDepartmentId");
   const items = nonEmptyArray(body.items, "items").map((line, i) => ({
     itemId: uuid(line.itemId, `items[${i}].itemId`),
-    quantityRequested: int(line.quantityRequested ?? line.quantity, `items[${i}].quantityRequested`, { min: 1 }),
+    quantityRequested: parseQuantity(line.quantityRequested ?? line.quantity, `items[${i}].quantityRequested`, { positive: true }),
   }));
   const department = await prisma.outletDepartment.findUnique({ where: { id: outletDepartmentId } });
   if (!department) throw notFound("Outlet department");
@@ -90,15 +90,16 @@ const issueInTx = async (tx, id, body, issuedBy, at = new Date()) => {
   const overrides = new Map();
   for (const [i, raw] of (body.lines ?? []).entries()) {
     const lineId = uuid(raw.requisitionItemId, `lines[${i}].requisitionItemId`);
-    overrides.set(lineId, int(raw.quantityIssued, `lines[${i}].quantityIssued`));
+    overrides.set(lineId, parseQuantity(raw.quantityIssued, `lines[${i}].quantityIssued`));
   }
   for (const lineId of overrides.keys()) {
     if (!req.items.some((l) => l.id === lineId)) throw badRequest(`Line ${lineId} does not belong to this requisition`);
   }
 
   for (const line of req.items) {
-    const quantity = overrides.get(line.id) ?? line.quantityRequested;
-    if (quantity > line.quantityRequested) {
+    const requested = qty(line.quantityRequested);
+    const quantity = overrides.get(line.id) ?? requested;
+    if (quantity > requested) {
       throw badRequest(`Cannot issue ${quantity}; only ${line.quantityRequested} requested for line ${line.id}`);
     }
     if (quantity === 0) continue;
@@ -151,7 +152,7 @@ const departmentConsumption = async ({ from, to } = {}) => {
     const entry = byDept.get(dept.id);
     entry.totalValue = entry.totalValue.add(line.issuedValue);
     const item = entry.items.get(line.itemId) ?? { ...line.item, quantity: 0, value: D(0) };
-    item.quantity += line.quantityIssued;
+    item.quantity = qty(item.quantity + Number(line.quantityIssued));
     item.value = item.value.add(line.issuedValue);
     entry.items.set(line.itemId, item);
   }
