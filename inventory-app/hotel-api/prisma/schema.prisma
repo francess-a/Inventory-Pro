@@ -86,6 +86,12 @@ enum TransactionType {
   WASTE
 }
 
+enum PriceSource {
+  PURCHASE_RECEIPT // actual landed price from a goods receipt
+  VENDOR_QUOTE // quotation received from a supplier
+  MARKET_FEED // wholesale / mandi / market rate (manual entry or external feed)
+}
+
 // ─────────────────────────────────────────────────────────────
 // Models
 // ─────────────────────────────────────────────────────────────
@@ -96,9 +102,9 @@ model Item {
   barcode       String       @unique
   itemName      String
   category      ItemCategory
-  costPrice     Decimal      @db.Decimal(12, 2)
+  costPrice     Decimal      @db.Decimal(12, 2) // weighted average cost, updated on every receipt
   unitOfMeasure String // e.g. kg, ltr, pcs, pack
-  minStockLevel Int
+  minStockLevel Int // safety stock
   maxStockLevel Int
   reorderPoint  Int
 
@@ -107,33 +113,49 @@ model Item {
   abcCategory AbcCategory?
   xyzCategory XyzCategory?
 
+  // When true, the replenishment engine overwrites min/max/reorder point from
+  // consumption history. Set to false to keep manually maintained levels.
+  autoPlanning      Boolean @default(true)
+  orderMultiple     Int     @default(1) // suggested order quantities are rounded up to this pack size
+  preferredVendorId String? @db.Uuid
+  isActive          Boolean @default(true)
+
   centralStock     CentralStock?
   outletStocks     OutletStock[]
   transactionLogs  InventoryTransaction[]
   orderItems       PurchaseOrderItem[]
   requisitionItems RequisitionItem[]
+  priceQuotes      PriceQuote[]
+  preferredVendor  Vendor?                @relation("PreferredVendor", fields: [preferredVendorId], references: [id], onDelete: SetNull)
 
   @@index([category])
 }
 
 model Vendor {
-  id           String @id @default(uuid()) @db.Uuid
+  id           String  @id @default(uuid()) @db.Uuid
   vendorName   String
   contactName  String
   email        String
   phone        String
   leadTimeDays Int // Expected time between PO placement and dock delivery
+  isActive     Boolean @default(true)
 
   purchaseOrders PurchaseOrder[]
+  priceQuotes    PriceQuote[]
+  preferredItems Item[]          @relation("PreferredVendor")
 }
 
 model PurchaseOrder {
-  id         String              @id @default(uuid()) @db.Uuid
-  poNumber   String              @unique
-  vendorId   String              @db.Uuid
-  status     PurchaseOrderStatus @default(DRAFT)
-  createdAt  DateTime            @default(now())
-  receivedAt DateTime?
+  id                 String              @id @default(uuid()) @db.Uuid
+  poNumber           String              @unique
+  vendorId           String              @db.Uuid
+  status             PurchaseOrderStatus @default(DRAFT)
+  createdAt          DateTime            @default(now())
+  sentAt             DateTime?
+  expectedDeliveryAt DateTime? // sentAt + vendor lead time unless overridden
+  receivedAt         DateTime? // first dock delivery; drives actual lead time
+  invoiceNumber      String?
+  notes              String?
 
   items  PurchaseOrderItem[]
   vendor Vendor              @relation(fields: [vendorId], references: [id])
@@ -150,6 +172,7 @@ model PurchaseOrderItem {
   quantityReceived Int     @default(0)
   quantityRejected Int     @default(0)
   rejectionReason  String?
+  unitPrice        Decimal @db.Decimal(12, 2)
 
   purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
   item          Item          @relation(fields: [itemId], references: [id])
@@ -193,10 +216,16 @@ model OutletStock {
 
 model Requisition {
   id                 String            @id @default(uuid()) @db.Uuid
+  requisitionNumber  String            @unique
   outletDepartmentId String            @db.Uuid
   status             RequisitionStatus @default(PENDING)
   requestedBy        String
   createdAt          DateTime          @default(now())
+  approvedBy         String?
+  approvedAt         DateTime?
+  issuedBy           String?
+  issuedAt           DateTime?
+  remarks            String?
 
   items      RequisitionItem[]
   department OutletDepartment  @relation(fields: [outletDepartmentId], references: [id])
@@ -206,11 +235,13 @@ model Requisition {
 }
 
 model RequisitionItem {
-  id                String @id @default(uuid()) @db.Uuid
-  requisitionId     String @db.Uuid
-  itemId            String @db.Uuid
+  id                String   @id @default(uuid()) @db.Uuid
+  requisitionId     String   @db.Uuid
+  itemId            String   @db.Uuid
   quantityRequested Int
-  quantityIssued    Int    @default(0)
+  quantityIssued    Int      @default(0)
+  unitCost          Decimal? @db.Decimal(12, 2) // weighted average cost at the moment of issue
+  issuedValue       Decimal  @default(0) @db.Decimal(14, 2)
 
   requisition Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
   item        Item        @relation(fields: [itemId], references: [id])
@@ -223,15 +254,35 @@ model InventoryTransaction {
   id                       String          @id @default(uuid()) @db.Uuid
   itemId                   String          @db.Uuid
   type                     TransactionType
-  sourceLocation           String // 'CENTRAL' or OutletDepartment UUID
-  destinationLocation      String // OutletDepartment UUID or 'WASTE_BIN'
+  sourceLocation           String // 'CENTRAL', 'VENDOR:<uuid>' or OutletDepartment UUID
+  destinationLocation      String // 'CENTRAL', OutletDepartment UUID or 'WASTE_BIN'
   quantity                 Int
+  unitCost                 Decimal         @db.Decimal(12, 2)
+  transactionValue         Decimal         @db.Decimal(14, 2)
   closingStockCentral      Int
   closingStockCentralValue Decimal         @db.Decimal(14, 2)
+  referenceId              String? // PurchaseOrder / Requisition id that caused the movement
+  remarks                  String?
   timestamp                DateTime        @default(now())
 
   item Item @relation(fields: [itemId], references: [id])
 
   @@index([itemId, timestamp])
-  @@index([type])
+  @@index([type, timestamp])
+}
+
+model PriceQuote {
+  id         String      @id @default(uuid()) @db.Uuid
+  itemId     String      @db.Uuid
+  vendorId   String?     @db.Uuid // null for market rates not tied to a supplier
+  source     PriceSource
+  unitPrice  Decimal     @db.Decimal(12, 2)
+  market     String? // e.g. 'Koyambedu wholesale', 'Metro Cash & Carry'
+  recordedAt DateTime    @default(now())
+
+  item   Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([itemId, recordedAt])
+  @@index([vendorId])
 }

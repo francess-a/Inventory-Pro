@@ -5,6 +5,11 @@ import Items from "./pages/Items";
 import Indents from "./pages/Indents";
 import Reports from "./pages/Reports";
 import Login from "./pages/Login";
+import Stock from "./pages/Stock";
+import Purchases from "./pages/Purchases";
+import Requisitions from "./pages/Requisitions";
+import Vendors from "./pages/Vendors";
+import MarketPrices from "./pages/MarketPrices";
 import NavBar from "./components/NavBar";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -43,6 +48,46 @@ function App() {
           element={
             <ProtectedRoute>
               <Reports />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/stock"
+          element={
+            <ProtectedRoute>
+              <Stock />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/purchases"
+          element={
+            <ProtectedRoute>
+              <Purchases />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/requisitions"
+          element={
+            <ProtectedRoute>
+              <Requisitions />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vendors"
+          element={
+            <ProtectedRoute>
+              <Vendors />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/market"
+          element={
+            <ProtectedRoute>
+              <MarketPrices />
             </ProtectedRoute>
           }
         />

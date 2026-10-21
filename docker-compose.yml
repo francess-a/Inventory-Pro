@@ -10,6 +10,31 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=hotel_inventory
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  hotel-api:
+    build: ./inventory-app/hotel-api
+    container_name: hotel-inventory-api
+    restart: always
+    ports:
+      - "5100:5100"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/hotel_inventory
+      - JWT_SECRET=inventory-secret
+    depends_on:
+      - postgres
+
   backend:
     build: ./inventory-app/backend
     container_name: inventory-backend
@@ -29,6 +54,8 @@ services:
       - "3000:80"
     depends_on:
       - backend
+      - hotel-api
 
 volumes:
   mongo_data:
+  postgres_data:

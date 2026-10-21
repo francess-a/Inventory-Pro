@@ -20,6 +20,11 @@ export default function NavBar() {
       <div className="nav-brand">Inventory App</div>
       <div className="nav-links">
         <NavLink to="/">Dashboard</NavLink>
+        <NavLink to="/stock">Stock</NavLink>
+        <NavLink to="/purchases">Purchases</NavLink>
+        <NavLink to="/requisitions">Requisitions</NavLink>
+        <NavLink to="/vendors">Vendors</NavLink>
+        <NavLink to="/market">Market Prices</NavLink>
         <NavLink to="/items">Items</NavLink>
         <NavLink to="/indents">Indents</NavLink>
         <NavLink to="/reports">Reports</NavLink>
