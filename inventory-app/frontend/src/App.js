@@ -8,6 +8,7 @@ import Requisitions from "./pages/Requisitions";
 import Vendors from "./pages/Vendors";
 import MarketPrices from "./pages/MarketPrices";
 import Users from "./pages/Users";
+import Reports from "./pages/Reports";
 import NavBar from "./components/NavBar";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -73,10 +74,17 @@ function App() {
             </ProtectedRoute>
           }
         />
-        {/* Superseded pages of the original app: items -> stock, indents & usage reports -> requisitions. */}
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute>
+              <Reports />
+            </ProtectedRoute>
+          }
+        />
+        {/* Superseded pages of the original app: items -> stock, indents -> requisitions. */}
         <Route path="/items" element={<Navigate to="/stock" replace />} />
         <Route path="/indents" element={<Navigate to="/requisitions" replace />} />
-        <Route path="/reports" element={<Navigate to="/requisitions" replace />} />
       </Routes>
     </BrowserRouter>
   );

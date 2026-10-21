@@ -12,6 +12,7 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../src/db");
 const { createInTx, sendInTx, receiveInTx } = require("../src/services/purchasing");
 const { issueInTx } = require("../src/services/requisitions");
+const { issueFromCentral } = require("../src/services/ledger");
 const { DAY_MS } = require("../src/lib/planning");
 
 const HISTORY_DAYS = 120;
@@ -252,6 +253,23 @@ const main = async () => {
           });
           await issueInTx(tx, req.id, { lines: issueLines }, "store keeper", at(day, 11));
         }
+        // Perishables occasionally spoil in the central store (~2% of daily demand).
+        for (const item of items) {
+          const perishable = ["VEGETABLE", "CHICKEN", "MUTTON", "SEAFOOD", "DAIRY"].includes(item.category);
+          if (!perishable || isToday || rand() > 0.12) continue;
+          const spoiled = Math.min(item.onHand, Math.round(item.demand * 0.15 * (0.5 + rand()) * 10) / 10);
+          if (spoiled <= 0) continue;
+          await issueFromCentral(tx, {
+            itemId: item.id,
+            quantity: spoiled,
+            type: "WASTE",
+            destination: "WASTE_BIN",
+            remarks: pick(["Spoiled in cold room", "Past use-by date", "Damaged packaging"]),
+            timestamp: at(day, 18),
+          });
+          item.onHand = Math.round((item.onHand - spoiled) * 1000) / 1000;
+        }
+
         // Outlets consume what they were issued (issues are expensed to the department).
         await tx.outletStock.updateMany({ data: { quantityOnHand: 0 } });
 
@@ -280,7 +298,7 @@ const main = async () => {
 
   // A few manual stock events for the log.
   await prisma.$transaction(async (tx) => {
-    const { adjustCentral, issueFromCentral } = require("../src/services/ledger");
+    const { adjustCentral } = require("../src/services/ledger");
     const tomato = items.find((i) => i.sku === "VEG-TOM");
     const towel = items.find((i) => i.sku === "LIN-BTW");
     const tomatoStock = Number((await tx.centralStock.findUnique({ where: { itemId: tomato.id } })).quantityOnHand);

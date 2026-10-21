@@ -321,6 +321,21 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(Number(draft.items[0].quantityOrdered), 800 - Number((await central(rice.id)).quantityOnHand));
   });
 
+  await t.test("reports analytics agree with the transaction log", async () => {
+    const report = await ok("GET", "/reports/analytics");
+    const sum = (rows) => Math.round(rows.reduce((s, r) => s + r.value, 0) * 100) / 100;
+    // 25 kg onion @ 44 + 10 kg rice @ 87.35 + 0.75 kg butter @ 500 + 1 kg rice issued in the role test
+    assert.ok(report.kpis.issuesValue > 2348);
+    assert.equal(sum(report.byDepartment), report.kpis.issuesValue);
+    assert.equal(sum(report.spendByVendor), report.kpis.purchasesValue);
+    assert.equal(sum(report.topWaste), report.kpis.wasteValue); // fewer than 10 waste items here, so the top list is complete
+    assert.ok(report.stockValue.length >= 89);
+    assert.equal(report.stockValue[report.stockValue.length - 1].value, report.kpis.currentStockValue);
+    assert.equal(report.abc.reduce((s, a) => s + a.items, 0), 3);
+    assert.ok(report.weekly.some((w) => w.partial));
+    assert.equal((await call("GET", "/reports/analytics?from=2026-02-01&to=2026-01-01")).status, 400);
+  });
+
   await t.test("dashboard summary", async () => {
     const dash = await ok("GET", "/reports/dashboard");
     assert.equal(dash.itemCount, 3);

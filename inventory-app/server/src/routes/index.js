@@ -8,6 +8,7 @@ const vendors = require("../services/vendors");
 const market = require("../services/market");
 const replenishment = require("../services/replenishment");
 const reports = require("../services/reports");
+const { analytics } = require("../services/analytics");
 
 const router = express.Router();
 
@@ -90,6 +91,7 @@ router.post("/market/feed/sync", approver, async (req, res) => res.json(await ma
 
 // Reports
 router.get("/reports/dashboard", async (req, res) => res.json(await reports.dashboard()));
+router.get("/reports/analytics", async (req, res) => res.json(await analytics(req.query)));
 router.get("/reports/department-consumption", async (req, res) =>
   res.json(await requisitions.departmentConsumption(req.query))
 );
