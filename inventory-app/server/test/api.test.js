@@ -334,6 +334,26 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(report.abc.reduce((s, a) => s + a.items, 0), 3);
     assert.ok(report.weekly.some((w) => w.partial));
     assert.equal((await call("GET", "/reports/analytics?from=2026-02-01&to=2026-01-01")).status, 400);
+
+    // COGS statement: opening + purchases − closing, reconciling with what left the store.
+    const c = report.cogs;
+    assert.equal(c.opening, 0); // everything in this test happened inside the window
+    assert.ok(Math.abs(c.opening + c.purchases - c.closing - c.cogs) < 0.02);
+    // The replenishment test inserted 30 back-dated issue records (330 kg onion @ 44) that never
+    // moved stock; the reconciliation must surface exactly that gap (plus rounding only).
+    assert.ok(Math.abs(c.revaluation + 330 * 44) < 1, `unexplained difference ${c.revaluation}`);
+    assert.equal(report.kpis.cogs, c.cogs);
+    assert.equal(report.kpis.closingStockValue, report.kpis.currentStockValue);
+    const catSum = report.cogsByCategory.reduce((s, r) => s + r.cogs, 0);
+    assert.ok(Math.abs(catSum - c.cogs) < 0.05);
+
+    // FSN: every item with stock or movement is classified once; fast list is ranked by turnover.
+    assert.equal(report.fsnSummary.reduce((s, f) => s + f.items, 0), 3);
+    const turns = report.fastMoving.map((m) => m.annualTurnover ?? Infinity);
+    assert.deepEqual(turns, [...turns].sort((a, b) => b - a));
+    assert.ok(report.fastMoving.length <= 25 && report.nonMoving.length <= 25);
+    assert.ok(Array.isArray(report.insights));
+    for (const i of report.insights) assert.ok(["high", "medium", "low"].includes(i.severity) && i.title && i.action);
   });
 
   await t.test("dashboard summary", async () => {

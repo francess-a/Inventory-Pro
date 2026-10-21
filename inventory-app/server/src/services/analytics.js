@@ -5,8 +5,10 @@ const { date, badRequest } = require("../lib/http");
 const { DAY_MS } = require("../lib/planning");
 const { buildPlan } = require("./replenishment");
 const { scorecardsByVendor } = require("./vendors");
+const { buildInsights } = require("./insights");
 
 const round2 = (n) => Math.round(n * 100) / 100;
+const FAST_TURNOVER = 52; // annual stock turns for an item to count as fast moving
 const dayKey = (d) => d.toISOString().slice(0, 10);
 
 // Monday of the week containing `d` (UTC), as YYYY-MM-DD.
@@ -37,30 +39,45 @@ const sumBy = (rows, keyFn, valueFn) => {
 };
 
 /**
- * Central stock value at the end of each day in the range. Starts from each item's last
- * logged closing value before the range, then replays the transaction log.
+ * Replays the central-store log over the range. Starts from each item's last logged
+ * closing balance before `from`, then walks the range day by day, giving:
+ *   - total stock value at the end of each day,
+ *   - per item: opening and closing quantity/value and average quantity on hand.
  */
-const dailyStockValue = async (from, to, rangeTxns) => {
+const replayStock = async (from, to, rangeTxns, itemIds) => {
   const opening = await prisma.$queryRaw`
-    SELECT DISTINCT ON ("itemId") "itemId", "closingStockCentralValue"
+    SELECT DISTINCT ON ("itemId") "itemId", "closingStockCentral", "closingStockCentralValue"
     FROM "InventoryTransaction"
     WHERE "timestamp" < ${from}
     ORDER BY "itemId", "timestamp" DESC`;
-  const valueByItem = new Map(opening.map((r) => [r.itemId, Number(r.closingStockCentralValue)]));
-  let total = [...valueByItem.values()].reduce((s, v) => s + v, 0);
+  const state = new Map(itemIds.map((id) => [id, { qty: 0, value: 0 }]));
+  for (const r of opening) state.set(r.itemId, { qty: Number(r.closingStockCentral), value: Number(r.closingStockCentralValue) });
+  const perItem = new Map(
+    [...state].map(([id, s]) => [id, { openingQty: s.qty, openingValue: s.value, qtyDays: 0 }])
+  );
+  let total = [...state.values()].reduce((sum, s) => sum + s.value, 0);
   const points = [];
+  let days = 0;
   let i = 0;
   for (let t = from.getTime(); t < to.getTime(); t += DAY_MS) {
     const dayEnd = Math.min(t + DAY_MS, to.getTime());
     while (i < rangeTxns.length && rangeTxns[i].timestamp.getTime() < dayEnd) {
       const tx = rangeTxns[i++];
-      const next = Number(tx.closingStockCentralValue);
-      total += next - (valueByItem.get(tx.itemId) ?? 0);
-      valueByItem.set(tx.itemId, next);
+      const current = state.get(tx.itemId) ?? { qty: 0, value: 0 };
+      const next = { qty: Number(tx.closingStockCentral), value: Number(tx.closingStockCentralValue) };
+      total += next.value - current.value;
+      state.set(tx.itemId, next);
+      if (!perItem.has(tx.itemId)) perItem.set(tx.itemId, { openingQty: 0, openingValue: 0, qtyDays: 0 });
     }
+    for (const [id, s] of state) perItem.get(id).qtyDays += s.qty;
+    days += 1;
     points.push({ date: dayKey(new Date(t)), value: round2(total) });
   }
-  return points;
+  for (const [id, item] of perItem) {
+    const s = state.get(id);
+    Object.assign(item, { closingQty: s.qty, closingValue: s.value, avgQty: days ? item.qtyDays / days : s.qty });
+  }
+  return { points, perItem };
 };
 
 const analytics = async ({ from, to } = {}) => {
@@ -69,7 +86,7 @@ const analytics = async ({ from, to } = {}) => {
   if (fromDate >= toDate) throw badRequest("from must be before to");
   const days = Math.max(1, (toDate - fromDate) / DAY_MS);
 
-  const [txns, departments, vendors, plan, scorecards, reqLines, poCounts] = await Promise.all([
+  const [txns, departments, vendors, plan, scorecards, reqLines, poCounts, items, lastIssues] = await Promise.all([
     prisma.inventoryTransaction.findMany({
       where: { timestamp: { gte: fromDate, lt: toDate } },
       select: {
@@ -79,6 +96,7 @@ const analytics = async ({ from, to } = {}) => {
         destinationLocation: true,
         quantity: true,
         transactionValue: true,
+        closingStockCentral: true,
         closingStockCentralValue: true,
         timestamp: true,
         item: { select: { itemName: true, category: true, unitOfMeasure: true } },
@@ -98,6 +116,9 @@ const analytics = async ({ from, to } = {}) => {
       where: { createdAt: { gte: fromDate, lt: toDate } },
       _count: { _all: true },
     }),
+    prisma.item.findMany({ select: { id: true, itemName: true, category: true, unitOfMeasure: true, costPrice: true } }),
+    // Last time each item was issued, ever (for non-moving stock).
+    prisma.inventoryTransaction.groupBy({ by: ["itemId"], where: { type: "OUTLET_ISSUE" }, _max: { timestamp: true } }),
   ]);
 
   const value = (t) => Number(t.transactionValue);
@@ -128,9 +149,106 @@ const analytics = async ({ from, to } = {}) => {
       return { week: w.week, partial, purchases: round2(w.purchases), issues: round2(w.issues), waste: round2(w.waste) };
     });
 
-  const stockValue = await dailyStockValue(fromDate, toDate, txns);
+  const { points: stockValue, perItem } = await replayStock(fromDate, toDate, txns, items.map((i) => i.id));
   const avgStockValue = stockValue.reduce((s, p) => s + p.value, 0) / (stockValue.length || 1);
   const costOfIssues = total(issues) + total(centralWaste);
+
+  // ── Stock movement statement / cost of goods ─────────────────────────────
+  // COGS = opening stock + purchases − closing stock. It is reconciled against what the log
+  // says left the store (issues + central waste − adjustments); any remainder is cost
+  // revaluation from weighted-average pricing and rounding.
+  const itemById = new Map(items.map((i) => [i.id, i]));
+  const flows = new Map(
+    items.map((i) => [i.id, { purchases: 0, issues: 0, issuedQty: 0, issueCount: 0, waste: 0, allWaste: 0, adjustments: 0 }])
+  );
+  for (const t of txns) {
+    const f = flows.get(t.itemId);
+    if (!f) continue;
+    if (t.type === "PURCHASE_RECEIPT") f.purchases += value(t);
+    else if (t.type === "OUTLET_ISSUE") {
+      f.issues += value(t);
+      f.issuedQty += Number(t.quantity);
+      f.issueCount += 1;
+    } else if (t.type === "WASTE") {
+      f.allWaste += value(t);
+      if (t.sourceLocation === "CENTRAL") f.waste += value(t);
+    } else if (t.type === "ADJUSTMENT") f.adjustments += value(t);
+  }
+  const statementRow = (name, ids) => {
+    const r = { name, opening: 0, purchases: 0, issues: 0, waste: 0, adjustments: 0, closing: 0 };
+    for (const id of ids) {
+      const f = flows.get(id);
+      const st = perItem.get(id);
+      r.opening += st.openingValue;
+      r.closing += st.closingValue;
+      r.purchases += f.purchases;
+      r.issues += f.issues;
+      r.waste += f.waste;
+      r.adjustments += f.adjustments;
+    }
+    r.cogs = r.opening + r.purchases - r.closing;
+    r.revaluation = r.cogs - (r.issues + r.waste - r.adjustments);
+    r.consumptionRatio = r.opening + r.purchases ? (r.cogs / (r.opening + r.purchases)) * 100 : null;
+    return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "number" ? round2(v) : v]));
+  };
+  const byCat = new Map();
+  for (const i of items) byCat.set(i.category, [...(byCat.get(i.category) ?? []), i.id]);
+  const cogsByCategory = [...byCat]
+    .map(([cat, ids]) => statementRow(cat.replace(/_/g, " "), ids))
+    .filter((r) => r.opening || r.purchases || r.closing)
+    .sort((a, b) => b.cogs - a.cogs);
+  const cogs = statementRow("Total", items.map((i) => i.id));
+
+  // ── Fast / slow / non-moving (FSN) ───────────────────────────────────────
+  // Turnover = quantity issued ÷ average quantity on hand over the period. A hotel central
+  // store turns perishables within days, so "fast" means stock turns at least weekly
+  // (annualised turnover ≥ 52); "slow" moves less often; "non-moving" had no issues.
+  const lastIssueById = new Map(lastIssues.map((r) => [r.itemId, r._max.timestamp]));
+  const movement = items.map((i) => {
+    const f = flows.get(i.id);
+    const st = perItem.get(i.id);
+    const turnover = st.avgQty > 0 ? f.issuedQty / st.avgQty : f.issuedQty > 0 ? null : 0;
+    const annualTurnover = turnover === null ? null : turnover * (365 / days);
+    const fsn = f.issuedQty === 0 ? "N" : annualTurnover === null || annualTurnover >= FAST_TURNOVER ? "F" : "S";
+    const lastIssue = lastIssueById.get(i.id) ?? null;
+    return {
+      itemId: i.id,
+      name: i.itemName,
+      category: i.category.replace(/_/g, " "),
+      unit: i.unitOfMeasure,
+      fsn,
+      issuedQty: round2(f.issuedQty),
+      issuedValue: round2(f.issues),
+      issueCount: f.issueCount,
+      wasteValue: round2(f.allWaste),
+      avgDailyUsage: round2(f.issuedQty / days),
+      avgOnHand: round2(st.avgQty),
+      turnover: turnover === null ? null : round2(turnover),
+      annualTurnover: annualTurnover === null ? null : round2(annualTurnover),
+      daysOfCover: f.issuedQty > 0 ? round2(st.closingQty / (f.issuedQty / days)) : null,
+      closingQty: round2(st.closingQty),
+      closingValue: round2(st.closingValue),
+      lastIssue,
+      daysSinceIssue: lastIssue ? Math.floor((toDate - lastIssue) / DAY_MS) : null,
+    };
+  });
+  const fastMoving = movement
+    .filter((m) => m.issuedQty > 0)
+    .sort((a, b) => (b.annualTurnover ?? Infinity) - (a.annualTurnover ?? Infinity) || b.issuedValue - a.issuedValue)
+    .slice(0, 25);
+  const nonMoving = movement
+    .filter((m) => m.fsn === "N" && m.closingQty > 0)
+    .sort((a, b) => b.closingValue - a.closingValue)
+    .slice(0, 25);
+  const fsnSummary = ["F", "S", "N"].map((cls) => {
+    const rows = movement.filter((m) => m.fsn === cls && (m.closingQty > 0 || m.issuedQty > 0));
+    return {
+      name: { F: "Fast moving", S: "Slow moving", N: "Non-moving" }[cls],
+      fsn: cls,
+      items: rows.length,
+      value: round2(rows.reduce((s, m) => s + m.closingValue, 0)),
+    };
+  });
 
   const deptById = new Map(departments.map((d) => [d.id, departmentName(d)]));
   const byDepartment = [...sumBy(issues, (t) => t.destinationLocation, value)]
@@ -204,6 +322,12 @@ const analytics = async ({ from, to } = {}) => {
       wasteValue: total(waste),
       wastePctOfIssues: total(issues) ? round2((total(waste) / total(issues)) * 100) : null,
       currentStockValue: stockValue.length ? stockValue[stockValue.length - 1].value : 0,
+      openingStockValue: cogs.opening,
+      closingStockValue: cogs.closing,
+      cogs: cogs.cogs,
+      goodsAvailable: round2(cogs.opening + cogs.purchases),
+      consumptionRatio: cogs.consumptionRatio,
+      nonMovingValue: round2(movement.filter((m) => m.fsn === "N").reduce((s, m) => s + m.closingValue, 0)),
       averageStockValue: round2(avgStockValue),
       // Annualised: cost of goods issued over the period ÷ average stock value.
       inventoryTurnover: avgStockValue ? round2((costOfIssues / avgStockValue) * (365 / days)) : null,
@@ -223,6 +347,12 @@ const analytics = async ({ from, to } = {}) => {
     stockStatus,
     vendorPerformance,
     fulfilment,
+    cogs,
+    cogsByCategory,
+    fastMoving,
+    nonMoving,
+    fsnSummary,
+    insights: await buildInsights({ movement, plan, scorecards, cogs, days }),
   };
 };
 

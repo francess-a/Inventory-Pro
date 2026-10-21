@@ -63,3 +63,15 @@ button.link { background: none; border: none; color: #3538cd; cursor: pointer; p
   .report-grid { grid-template-columns: 1fr 1fr; }
   .report-card { break-inside: avoid; }
 }
+.reports .kpi-inputs { display: flex; gap: 6px; margin-top: 6px; }
+.reports .kpi-inputs label { display: flex; flex-direction: column; font-size: 11px; color: #52514e; gap: 2px; }
+.reports .kpi-inputs input { width: 100%; min-width: 0; font-size: 13px; padding: 2px 6px; }
+.reports .kpi-inputs label:first-child { flex: 2; }
+.reports .kpi-inputs label:last-child { flex: 1; }
+.insights { background: #fcfcfb; }
+.insight-list { list-style: none; padding: 0; margin: 8px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.insight { border: 1px solid #e1e0d9; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; background: #fff; }
+.insight-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.insight-impact { margin-left: auto; }
+.insight-title { font-weight: 600; }
+@media (max-width: 900px) { .insight-list { grid-template-columns: 1fr; } }

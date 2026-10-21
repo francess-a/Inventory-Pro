@@ -79,6 +79,12 @@ const ITEMS = [
   { sku: "AME-SOP", itemName: "Guest Soap 40g", category: "AMENITIES", uom: "pcs", price: 12, demand: 130, cv: 0.2, trend: 0.0, season: 0.0, vendors: ["linen"], depts: ["HOUSEKEEPING/NONE"], multiple: 100 },
   { sku: "FO-KEY", itemName: "RFID Key Card", category: "FRONT_OFFICE", uom: "pcs", price: 55, demand: 6, cv: 0.7, trend: 0.0, season: 0.0, vendors: ["metro"], depts: ["FRONT_OFFICE/NONE"], multiple: 50 },
   { sku: "SPR-LED", itemName: "LED Bulb 9W", category: "SPARES", uom: "pcs", price: 110, demand: 2, cv: 0.9, trend: -0.03, season: 0.0, vendors: ["spares", "metro"], depts: ["MAINTENANCE/NONE"], multiple: 10 },
+  // Dead stock: bought once at the start of the period and never requisitioned since.
+  { sku: "BAR-LIQ", itemName: "Imported Liqueur 700ml (discontinued)", category: "BAR", uom: "pcs", price: 2850, demand: 0, initial: 18, cv: 0, trend: 0, season: 0, vendors: ["spirits"], depts: [] },
+  { sku: "LIN-CVR", itemName: "Banquet Chair Cover (old colour)", category: "LINEN", uom: "pcs", price: 240, demand: 0, initial: 120, cv: 0, trend: 0, season: 0, vendors: ["linen"], depts: [] },
+  { sku: "AME-DEC", itemName: "Festive Decor Kit", category: "AMENITIES", uom: "pcs", price: 1650, demand: 0, initial: 14, cv: 0, trend: 0, season: 0, vendors: ["linen"], depts: [] },
+  { sku: "GRO-TRF", itemName: "Truffle Oil 250ml", category: "GROCERY", uom: "pcs", price: 1180, demand: 0, initial: 12, cv: 0, trend: 0.04, season: 0, vendors: ["metro"], depts: [] },
+  { sku: "SPR-TST", itemName: "Toaster Element (old model)", category: "SPARES", uom: "pcs", price: 690, demand: 0, initial: 9, cv: 0, trend: 0, season: 0, vendors: ["spares"], depts: [] },
   { sku: "SPR-FLT", itemName: "AC Filter 18x24", category: "SPARES", uom: "pcs", price: 340, demand: 0.6, cv: 1.2, trend: 0.0, season: 0.0, vendors: ["spares"], depts: ["MAINTENANCE/NONE"] },
 ];
 
@@ -278,6 +284,13 @@ const main = async () => {
         const byVendor = new Map();
         for (const item of items) {
           const vendor = vendorByKey[rand() < 0.8 || item.vendors.length === 1 ? item.vendors[0] : item.vendors[1]];
+          if (item.initial) {
+            if (day === 0) {
+              if (!byVendor.has(vendor.key)) byVendor.set(vendor.key, []);
+              byVendor.get(vendor.key).push({ itemId: item.id, quantityOrdered: item.initial, unitPrice: Math.round(marketPrice(item, day) * vendor.priceFactor * 100) / 100 });
+            }
+            continue;
+          }
           const cover = item.demand * (vendor.leadTimeDays + 3);
           if (openOrderFor.has(item.id) || item.onHand >= cover || isToday) continue;
           if (day > HISTORY_DAYS - 6 && item.sku.charCodeAt(4) % 2 === 0) continue;

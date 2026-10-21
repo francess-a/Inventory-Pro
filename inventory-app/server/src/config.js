@@ -7,6 +7,8 @@ module.exports = {
   port: number("PORT", 5100),
   jwtSecret: process.env.JWT_SECRET || "inventory-secret",
   authDisabled: process.env.AUTH_DISABLED === "true",
+  // Currency used in generated report text (the web app formats its own figures).
+  currency: process.env.CURRENCY || "INR",
   // Anyone may create a store-staff account unless this is "false" (admins can always add users).
   allowSignup: process.env.ALLOW_SIGNUP !== "false",
   // Built React app served by this server; set to "" to run the API only.

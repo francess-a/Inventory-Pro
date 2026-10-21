@@ -16,6 +16,7 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
+  LabelList,
 } from "recharts";
 import api, { errorMessage } from "../services/api";
 import { money, num, pct, date } from "../utils/format";
@@ -83,8 +84,8 @@ function ValueTooltip({ active, payload, label, format = money, labelFormat = (l
   );
 }
 
-function ChartCard({ title, subtitle, columns, rows, wide, children }) {
-  const [showTable, setShowTable] = useState(false);
+function ChartCard({ title, subtitle, columns, rows, wide, tableOnly, children }) {
+  const [showTable, setShowTable] = useState(Boolean(tableOnly));
   return (
     <section className={`card report-card${wide ? " wide" : ""}`}>
       <header className="report-card-head">
@@ -93,9 +94,11 @@ function ChartCard({ title, subtitle, columns, rows, wide, children }) {
           {subtitle && <p className="muted">{subtitle}</p>}
         </div>
         <div className="report-card-actions">
-          <button type="button" className="link" onClick={() => setShowTable(!showTable)}>
-            {showTable ? "Chart" : "Table"}
-          </button>
+          {!tableOnly && (
+            <button type="button" className="link" onClick={() => setShowTable(!showTable)}>
+              {showTable ? "Chart" : "Table"}
+            </button>
+          )}
           <button type="button" className="link" onClick={() => downloadCsv(title, columns, rows)} disabled={!rows.length}>
             CSV
           </button>
@@ -135,7 +138,7 @@ function RankedBars({ data, format = money, domain, height, target }) {
     <ResponsiveContainer width="100%" height={height ?? Math.max(180, data.length * 30 + 40)}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 72, left: 8, bottom: 4 }} barCategoryGap={6}>
         <CartesianGrid horizontal={false} stroke={INK.grid} />
-        <XAxis type="number" {...axisProps} domain={domain} tickFormatter={format === money ? compactMoney : (v) => `${v}%`} />
+        <XAxis type="number" {...axisProps} domain={domain} tickFormatter={format === money ? compactMoney : format} />
         <YAxis type="category" dataKey="name" width={170} {...axisProps} axisLine={false} interval={0} />
         <Tooltip cursor={{ fill: "rgba(42,120,214,0.08)" }} content={<ValueTooltip format={format} />} />
         {target !== undefined && <ReferenceLine x={target} stroke={INK.muted} strokeDasharray="4 4" label={{ value: `target ${target}%`, fill: INK.muted, fontSize: 11, position: "top" }} />}
@@ -180,13 +183,131 @@ function Donut({ data, colors, format = money }) {
   );
 }
 
-const Kpi = ({ label, value, note }) => (
+const Kpi = ({ label, value, note, children }) => (
   <div className="kpi">
     <div className="label">{label}</div>
     <div className="value">{value}</div>
     {note && <div className="muted">{note}</div>}
+    {children}
   </div>
 );
+
+// Opening stock → closing stock bridge. Each step is a floating bar: an invisible base plus
+// the visible change, so the eye follows the running total.
+function CogsWaterfall({ cogs }) {
+  const steps = [
+    { name: "Opening stock", delta: cogs.opening, total: true },
+    { name: "Purchases", delta: cogs.purchases },
+    { name: "Issued", delta: -cogs.issues },
+    { name: "Waste", delta: -cogs.waste },
+    { name: "Adjustments", delta: cogs.adjustments },
+    { name: "Revaluation", delta: -cogs.revaluation },
+    { name: "Closing stock", delta: cogs.closing, total: true },
+  ].filter((st) => st.total || Math.abs(st.delta) >= 0.01);
+  let running = 0;
+  const data = steps.map((st) => {
+    if (st.total) {
+      running = st.delta;
+      return { name: st.name, base: 0, value: st.delta, kind: "total", label: st.delta, text: compactMoney(st.delta) };
+    }
+    const start = running;
+    running += st.delta;
+    const text = `${st.delta >= 0 ? "+" : "−"}${compactMoney(Math.abs(st.delta))}`;
+    return { name: st.name, base: Math.min(start, running), value: Math.abs(st.delta), kind: st.delta >= 0 ? "up" : "down", label: st.delta, text };
+  });
+  const fills = { total: "#52514e", up: SERIES[0], down: SERIES[1] };
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart data={data} margin={{ top: 24, right: 24, left: 8, bottom: 4 }} barCategoryGap="25%">
+        <CartesianGrid vertical={false} stroke={INK.grid} />
+        <XAxis dataKey="name" {...axisProps} interval={0} />
+        <YAxis {...axisProps} axisLine={false} tickFormatter={compactMoney} width={72} />
+        <Tooltip
+          cursor={{ fill: "rgba(42,120,214,0.08)" }}
+          content={({ active, payload }) =>
+            active && payload?.length ? (
+              <div className="viz-tooltip">
+                <div className="viz-tooltip-row">
+                  <strong>{money(payload[0].payload.label)}</strong>
+                  <span className="muted">{payload[0].payload.name}</span>
+                </div>
+              </div>
+            ) : null
+          }
+        />
+        <Bar dataKey="base" stackId="w" fill="transparent" isAnimationActive={false} />
+        <Bar dataKey="value" stackId="w" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+          {data.map((d) => <Cell key={d.name} fill={fills[d.kind]} />)}
+          {/* Label each step with its own signed amount, not the running total. */}
+          <LabelList dataKey="text" position="top" fill="#52514e" fontSize={12} />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+const SEVERITY = {
+  high: { label: "High", className: "OUT_OF_STOCK" },
+  medium: { label: "Medium", className: "REORDER" },
+  low: { label: "Low", className: "OK" },
+};
+
+function Insights({ insights, costPct, targetCostPct }) {
+  const [showAll, setShowAll] = useState(false);
+  const extra =
+    costPct !== null && costPct > targetCostPct
+      ? [{
+          severity: "high",
+          category: "Cost of goods",
+          title: `Cost of goods is ${pct(costPct)} of revenue, above the ${targetCostPct}% target`,
+          detail: "Measured as cost of goods ÷ the revenue entered for this period.",
+          action: "Review recipe costing and portion sizes for the highest-consumption items, act on the price insights below, and cut waste.",
+          impact: null,
+        }]
+      : [];
+  const all = [...extra, ...insights];
+  const shown = showAll ? all : all.slice(0, 6);
+  return (
+    <section className="card insights">
+      <header className="report-card-head">
+        <div>
+          <h3>Insights &amp; recommendations</h3>
+          <p className="muted">
+            From market price trends, supplier prices, stock levels, waste and supplier performance; savings are
+            estimated over the next 30 days at current usage.
+          </p>
+        </div>
+      </header>
+      {all.length === 0 ? (
+        <p className="muted empty">Nothing needs attention in this period.</p>
+      ) : (
+        <ul className="insight-list">
+          {shown.map((i, n) => (
+            <li key={n} className="insight">
+              <div className="insight-head">
+                <span className={`badge ${SEVERITY[i.severity].className}`}>{SEVERITY[i.severity].label}</span>
+                <span className="muted">{i.category}</span>
+                {i.impact !== null && i.impact !== undefined && (
+                  <span className="insight-impact">
+                    <strong>{money(i.impact)}</strong> <span className="muted">{i.impactLabel}</span>
+                  </span>
+                )}
+              </div>
+              <div className="insight-title">{i.title}</div>
+              <div className="muted">{i.detail}</div>
+              <div><strong>Action:</strong> {i.action}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {all.length > 6 && (
+        <button type="button" className="link" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Show fewer" : `Show all ${all.length}`}
+        </button>
+      )}
+    </section>
+  );
+}
 
 export default function Reports() {
   const [preset, setPreset] = useState("90");
@@ -197,6 +318,8 @@ export default function Reports() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [revenue, setRevenue] = useState("");
+  const [targetCostPct, setTargetCostPct] = useState(30);
 
   const choosePreset = (value) => {
     setPreset(value);
@@ -226,6 +349,7 @@ export default function Reports() {
   }, [load]);
 
   const k = data?.kpis;
+  const costPct = k && Number(revenue) > 0 ? (k.cogs / Number(revenue)) * 100 : null;
   const weekLabel = (w) => `Week of ${date(w)}`;
 
   return (
@@ -254,17 +378,75 @@ export default function Reports() {
       {data && (
         <div style={{ opacity: loading ? 0.5 : 1, transition: "opacity 120ms" }}>
           <div className="kpis">
-            <Kpi label="Purchases" value={money(k.purchasesValue)} note={`${k.purchaseOrders} purchase orders`} />
+            <Kpi label="Opening stock" value={money(k.openingStockValue)} note={`on ${date(data.from)}`} />
+            <Kpi label="+ Purchases" value={money(k.purchasesValue)} note={`${k.purchaseOrders} purchase orders`} />
+            <Kpi label="− Closing stock" value={money(k.closingStockValue)} note={`on ${date(data.to)}`} />
+            <Kpi label="= Cost of goods (COGS)" value={money(k.cogs)} note="opening + purchases − closing" />
+            <Kpi label="COGS ratio" value={pct(k.consumptionRatio)} note="COGS ÷ goods available (opening + purchases)" />
+            <Kpi label="Cost of goods % of revenue" value={costPct === null ? "–" : pct(costPct)} note={`target ${targetCostPct}%`}>
+              <div className="kpi-inputs">
+                <label>
+                  Revenue for the period
+                  <input type="number" min="0" step="any" value={revenue} placeholder="enter revenue" onChange={(e) => setRevenue(e.target.value)} />
+                </label>
+                <label>
+                  Target %
+                  <input type="number" min="1" max="100" value={targetCostPct} onChange={(e) => setTargetCostPct(Number(e.target.value) || 30)} />
+                </label>
+              </div>
+            </Kpi>
             <Kpi label="Issued to departments" value={money(k.issuesValue)} />
             <Kpi label="Waste" value={money(k.wasteValue)} note={k.wastePctOfIssues === null ? null : `${pct(k.wastePctOfIssues, 2)} of issues`} />
-            <Kpi label="Stock value now" value={money(k.currentStockValue)} note={`avg ${money(k.averageStockValue)}`} />
             <Kpi label="Inventory turnover" value={k.inventoryTurnover === null ? "–" : `${num(k.inventoryTurnover)}×`} note="per year" />
             <Kpi label="Days of inventory" value={k.daysOfInventory === null ? "–" : `${num(k.daysOfInventory)} days`} />
             <Kpi label="Requisition fill rate" value={pct(k.requisitionFillRate)} note="quantity issued ÷ requested" />
-            <Kpi label="Items to reorder" value={k.itemsToReorder} note="now" />
+            <Kpi label="Non-moving stock" value={money(k.nonMovingValue)} note="no issues in the period" />
           </div>
 
+          <Insights insights={data.insights} costPct={costPct} targetCostPct={targetCostPct} />
+
           <div className="report-grid">
+            <ChartCard
+              wide
+              title="Cost of goods: opening to closing stock"
+              subtitle="How opening stock plus purchases became closing stock; issued, waste and adjustments make up the cost of goods"
+              rows={[
+                { step: "Opening stock", value: data.cogs.opening },
+                { step: "+ Purchases", value: data.cogs.purchases },
+                { step: "− Issued to departments", value: data.cogs.issues },
+                { step: "− Waste (central store)", value: data.cogs.waste },
+                { step: "± Stock adjustments", value: data.cogs.adjustments },
+                { step: "± Revaluation / rounding", value: -data.cogs.revaluation },
+                { step: "= Closing stock", value: data.cogs.closing },
+                { step: "Cost of goods (opening + purchases − closing)", value: data.cogs.cogs },
+              ]}
+              columns={[
+                { key: "step", label: "Step" },
+                { key: "value", label: "Value", numeric: true, format: money },
+              ]}
+            >
+              <CogsWaterfall cogs={data.cogs} />
+            </ChartCard>
+
+            <ChartCard
+              wide
+              tableOnly
+              title="Cost of goods by category"
+              subtitle="Stock movement statement; COGS ratio = COGS ÷ (opening + purchases)"
+              rows={[...data.cogsByCategory, data.cogs]}
+              columns={[
+                { key: "name", label: "Category" },
+                { key: "opening", label: "Opening", numeric: true, format: money },
+                { key: "purchases", label: "Purchases", numeric: true, format: money },
+                { key: "issues", label: "Issued", numeric: true, format: money },
+                { key: "waste", label: "Waste", numeric: true, format: money },
+                { key: "adjustments", label: "Adjustments", numeric: true, format: money },
+                { key: "closing", label: "Closing", numeric: true, format: money },
+                { key: "cogs", label: "COGS", numeric: true, format: money },
+                { key: "consumptionRatio", label: "COGS ratio", numeric: true, format: (v) => pct(v) },
+              ]}
+            />
+
             <ChartCard
               wide
               title="Purchases vs issues by week"
@@ -424,6 +606,63 @@ export default function Reports() {
               ]}
             >
               <RankedBars data={data.topWaste} />
+            </ChartCard>
+
+            <ChartCard
+              title="Fast, slow and non-moving items"
+              subtitle="Number of items by movement class (fast = stock turns at least weekly)"
+              rows={data.fsnSummary}
+              columns={[
+                { key: "name", label: "Class" },
+                { key: "items", label: "Items", numeric: true },
+                { key: "value", label: "Closing stock value", numeric: true, format: money },
+              ]}
+            >
+              <Donut
+                data={data.fsnSummary.filter((f) => f.items > 0).map((f) => ({ ...f, value: f.items }))}
+                colors={(d) => ({ F: SERIES[0], S: SERIES[3], N: SERIES[1] })[d.fsn]}
+                format={(v) => `${v} items`}
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="Top 25 non-moving items"
+              subtitle="No issues in the period, by stock value tied up"
+              rows={data.nonMoving}
+              columns={[
+                { key: "name", label: "Item" },
+                { key: "category", label: "Category" },
+                { key: "closingQty", label: "On hand", numeric: true, format: (v) => num(v, 3) },
+                { key: "unit", label: "Unit" },
+                { key: "closingValue", label: "Value", numeric: true, format: money },
+                { key: "lastIssue", label: "Last issued", format: (v) => (v ? date(v) : "never") },
+                { key: "daysSinceIssue", label: "Days since issue", numeric: true, format: (v) => (v === null ? "–" : v) },
+              ]}
+            >
+              <RankedBars data={data.nonMoving.map((m) => ({ name: m.name, value: m.closingValue }))} />
+            </ChartCard>
+
+            <ChartCard
+              wide
+              title="Top 25 fast-moving items"
+              subtitle="Ranked by stock turnover (quantity issued ÷ average quantity on hand), shown as turns per year"
+              rows={data.fastMoving}
+              columns={[
+                { key: "name", label: "Item" },
+                { key: "category", label: "Category" },
+                { key: "annualTurnover", label: "Turns / year", numeric: true, format: (v) => (v === null ? "–" : num(v)) },
+                { key: "issuedQty", label: "Issued", numeric: true, format: (v) => num(v, 3) },
+                { key: "unit", label: "Unit" },
+                { key: "issueCount", label: "Issues", numeric: true },
+                { key: "avgDailyUsage", label: "Avg / day", numeric: true, format: (v) => num(v, 2) },
+                { key: "daysOfCover", label: "Days of cover", numeric: true, format: (v) => (v === null ? "–" : num(v)) },
+                { key: "issuedValue", label: "Issued value", numeric: true, format: money },
+              ]}
+            >
+              <RankedBars
+                data={data.fastMoving.map((m) => ({ name: m.name, value: m.annualTurnover ?? 0 }))}
+                format={(v) => `${num(v)}×`}
+              />
             </ChartCard>
 
             <ChartCard
