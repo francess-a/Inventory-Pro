@@ -115,7 +115,8 @@ your-repo/
 
 Configure these in **Settings → Secrets and variables → Actions**:
 
-- `DATABASE_URL` → PostgreSQL connection string (used by backup/restore)
+- `DATABASE_URL` → PostgreSQL connection string (used by the app, backup and restore)
+- `ACR_LOGIN_SERVER`, `AZURE_CREDENTIALS`, `AZURE_AKS_CLUSTER`, `INVENTORY_HOST` → AKS deploy in `test-deploy-aks.yml`
 - `AZURE_REGISTRY_LOGIN_SERVER`, `AZURE_REGISTRY_USERNAME`, `AZURE_REGISTRY_PASSWORD`
 - `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `AZURE_APP_PLAN`
 - `AZURE_STORAGE_CONNECTION_STRING`

@@ -1,12 +1,21 @@
 name: Manual Restore
 on:
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the Nightly Backup workflow run to restore from (see its URL)"
+        required: true
+permissions:
+  actions: read
 jobs:
   restore:
     runs-on: ubuntu-latest
     steps:
+      # Artifacts live on the backup run, so fetch them from that run explicitly.
       - uses: actions/download-artifact@v4
         with:
           name: nightly-backup
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
       - name: Restore PostgreSQL
         run: pg_restore --clean --if-exists --no-owner --dbname="${{ secrets.DATABASE_URL }}" backup.dump

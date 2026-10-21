@@ -79,10 +79,30 @@ jobs:
         run: |
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      # Helm upgrade
+      # Build the single application image and push it to Azure Container Registry
+      - name: Build and push image
+        run: |
+          az acr login --name "$(echo '${{ secrets.ACR_LOGIN_SERVER }}' | cut -d. -f1)"
+          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/hotel-inventory:${{ github.sha }} inventory-app
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/hotel-inventory:${{ github.sha }}
+
+      # App configuration as a Kubernetes Secret (DATABASE_URL, JWT_SECRET)
+      - name: Update app secret
+        run: |
+          kubectl create secret generic inventory-secrets \
+            --from-literal=DATABASE_URL='${{ secrets.DATABASE_URL }}' \
+            --from-literal=JWT_SECRET='${{ secrets.JWT_SECRET }}' \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # Helm upgrade (database migrations run when the container starts)
       - name: Helm Upgrade
         run: |
           helm upgrade --install inventory ./helm/inventory \
-            --set image.backend=${{ secrets.ACR_LOGIN_SERVER }}/inventory-backend:latest \
-            --set image.frontend=${{ secrets.ACR_LOGIN_SERVER }}/inventory-frontend:latest \
-            --set ingress.host=${{ secrets.INVENTORY_HOST }}
+            --set image.repository=${{ secrets.ACR_LOGIN_SERVER }}/hotel-inventory \
+            --set image.tag=${{ github.sha }} \
+            --set existingSecret=inventory-secrets \
+            --set ingress.enabled=true \
+            --set "ingress.hosts[0].host=${{ secrets.INVENTORY_HOST }}" \
+            --set "ingress.hosts[0].paths[0].path=/" \
+            --set "ingress.hosts[0].paths[0].pathType=Prefix" \
+            --wait
