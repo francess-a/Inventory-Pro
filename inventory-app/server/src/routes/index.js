@@ -12,9 +12,23 @@ const { analytics } = require("../services/analytics");
 
 const router = express.Router();
 
-// Store staff ("user") can raise requisitions, receive goods, issue stock, record waste and
-// prices. Approvals, master data, purchase commitments and stock corrections need an approver.
+// Staff ("user") only work with requisitions: they raise them, follow their status and see the
+// indent vs received report. Everything else (approving and issuing, purchasing, stock, master
+// data and the management reports) is for approvers and admins.
 const approver = requireRole("approver", "admin");
+
+const STAFF_ROUTES = [
+  ["GET", /^\/items$/], // item picker on the requisition form
+  ["GET", /^\/departments$/],
+  ["GET", /^\/requisitions(\/[^/]+)?$/],
+  ["POST", /^\/requisitions$/],
+  ["GET", /^\/reports\/indent-vs-received$/],
+];
+router.use((req, res, next) => {
+  if (req.user?.role !== "user") return next();
+  if (STAFF_ROUTES.some(([method, path]) => method === req.method && path.test(req.path))) return next();
+  return res.status(403).json({ message: "Staff accounts can only raise and track requisitions" });
+});
 
 // Item master & stock
 router.get("/items", async (req, res) => res.json(await inventory.listItems(req.query)));
@@ -65,7 +79,7 @@ router.post("/requisitions/:id/approve", approver, async (req, res) =>
 router.post("/requisitions/:id/reject", approver, async (req, res) =>
   res.json(await requisitions.rejectRequisition(req.params.id, userName(req), text(req.body?.remarks, "remarks", { optional: true })))
 );
-router.post("/requisitions/:id/issue", async (req, res) =>
+router.post("/requisitions/:id/issue", approver, async (req, res) =>
   res.json(await requisitions.issueRequisition(req.params.id, req.body ?? {}, userName(req)))
 );
 
@@ -95,6 +109,7 @@ router.post("/market/feed/sync", approver, async (req, res) => res.json(await ma
 // Reports
 router.get("/reports/dashboard", async (req, res) => res.json(await reports.dashboard()));
 router.get("/reports/analytics", async (req, res) => res.json(await analytics(req.query)));
+router.get("/reports/indent-vs-received", async (req, res) => res.json(await requisitions.indentVsReceived(req.query)));
 router.get("/reports/department-consumption", async (req, res) =>
   res.json(await requisitions.departmentConsumption(req.query))
 );

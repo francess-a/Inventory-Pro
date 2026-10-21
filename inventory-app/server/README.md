@@ -78,7 +78,7 @@ npm start                               # app + API on http://localhost:5100
 
 **First login:** the first account created through "Create account" becomes the
 administrator. The demo seed instead creates `admin@hotel.example`,
-`approver@hotel.example` and `store@hotel.example`, with the password from `SEED_PASSWORD`
+`approver@hotel.example` and `staff@hotel.example`, with the password from `SEED_PASSWORD`
 (default `ChangeMe123!`). Change these before real use. Set `ALLOW_SIGNUP=false` to stop
 self-registration; admins can still add users on the Users page.
 
@@ -110,23 +110,35 @@ afterwards.
 | Requisitions | `GET/POST /requisitions`, `GET /requisitions/:id`, `POST /requisitions/:id/{approve,reject,issue}` |
 | Replenishment | `GET /replenishment[?onlyReorder=true]`, `POST /replenishment/recalculate`, `POST /replenishment/purchase-orders` |
 | Market | `GET /market/comparison`, `GET /market/items/:id/trend`, `POST /market/prices`, `POST /market/prices/import`, `POST /market/feed/sync` |
-| Reports | `GET /reports/dashboard`, `GET /reports/department-consumption?from=&to=` |
+| Reports | `GET /reports/dashboard`, `GET /reports/analytics?from=&to=`, `GET /reports/department-consumption?from=&to=`, `GET /reports/indent-vs-received?from=&to=&outletDepartmentId=&status=` |
 
 ## Roles
 
-Each user has a role: `user` (store staff), `approver` or `admin`. Only admins can manage
-users (`GET/POST /users`, `PATCH /users/:id`).
+Each user has a role: `user` (department staff), `approver` (store manager) or `admin`. Only
+admins can manage users (`GET/POST /users`, `PATCH /users/:id`).
 
-| Action | `user` (store staff) | `approver` / `admin` |
-| --- | --- | --- |
-| View everything, raise requisitions, issue approved requisitions | ✓ | ✓ |
-| Create draft POs, post goods receipts, record waste and prices | ✓ | ✓ |
-| Approve/reject requisitions, send/cancel POs, direct purchases | | ✓ |
-| Add/edit items, vendors, departments; stock adjustments | | ✓ |
-| Recalculate levels, generate POs, sync market feed | | ✓ |
+| Action | `user` (staff) | `approver` | `admin` |
+| --- | --- | --- | --- |
+| Raise requisitions and follow their status | ✓ | ✓ | ✓ |
+| Indent vs Received report | ✓ | ✓ | ✓ |
+| Approve/reject and issue requisitions | | ✓ | ✓ |
+| Purchasing: POs, goods receipts, direct purchases, close short | | ✓ | ✓ |
+| Stock, waste, adjustments, items, vendors, departments, market prices | | ✓ | ✓ |
+| Dashboard, Reports, replenishment, vendor scorecards | | ✓ | ✓ |
+| Manage users | | | ✓ |
 
-The frontend hides the approver-only buttons from store staff, and the API returns 403 if they
-are called anyway.
+Staff see only Requisitions and Indent vs Received in the menu. The API enforces the same
+rules with an allow-list for staff (requisitions, the item and department pickers and the
+indent report) and returns 403 for anything else.
+
+## Indent vs Received
+
+`GET /reports/indent-vs-received?from=&to=&outletDepartmentId=&status=` compares what
+departments requested with what the store issued, for requisitions raised in the period. Each
+line ends up received in full, received short, rejected, or still waiting. Fill rate is received
+value ÷ indented value over closed lines (issued or rejected), so requisitions still waiting
+don't lower it. The response has totals, a per-department and per-item breakdown, a weekly
+series, and the individual lines.
 
 ## Quantities
 

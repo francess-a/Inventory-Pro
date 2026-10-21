@@ -4,7 +4,7 @@ import api, { errorMessage } from "../services/api";
 import { date } from "../utils/format";
 
 const ROLES = [
-  ["user", "Store staff"],
+  ["user", "Staff (requisitions only)"],
   ["approver", "Approver"],
   ["admin", "Administrator"],
 ];
@@ -58,8 +58,9 @@ export default function Users() {
     <div className="page">
       <h2>Users &amp; Roles</h2>
       <p className="muted">
-        Store staff raise requisitions, receive goods and issue stock. Approvers also approve requisitions, send purchase
-        orders, adjust stock and maintain items and vendors. Administrators also manage users.
+        Staff raise requisitions and follow them in the Indent vs Received report. Approvers run the store: they approve
+        and issue requisitions, purchase and receive goods, adjust stock, maintain items and vendors and see all reports.
+        Administrators also manage users.
       </p>
       {error && <p className="error">{error}</p>}
       {message && <p className="notice">{message}</p>}

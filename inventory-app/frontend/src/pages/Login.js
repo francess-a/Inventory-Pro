@@ -56,7 +56,7 @@ export default function Login() {
           {registering ? "Already have an account? Log in" : "New here? Create an account"}
         </button>
         {registering && (
-          <p className="muted">The first account becomes the administrator. Later accounts start as store staff; an administrator can change roles.</p>
+          <p className="muted">The first account becomes the administrator. Later accounts start as staff, who raise and track requisitions; an administrator can change roles.</p>
         )}
       </form>
     </div>

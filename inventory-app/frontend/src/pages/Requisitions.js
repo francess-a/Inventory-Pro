@@ -306,7 +306,7 @@ export default function Requisitions() {
                         <button type="button" className="link" onClick={() => decide(r, "reject")}>Reject</button>
                       </>
                     )}
-                    {r.status === "APPROVED" && (
+                    {canApprove && r.status === "APPROVED" && (
                       <button type="button" className="link" onClick={() => setIssuing(r)}>Issue</button>
                     )}
                   </td>
@@ -330,7 +330,7 @@ export default function Requisitions() {
         </table>
       </div>
 
-      <Consumption />
+      {canApprove && <Consumption />}
     </div>
   );
 }

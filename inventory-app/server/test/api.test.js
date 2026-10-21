@@ -392,6 +392,29 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(sum(heat.rows.flatMap((r) => r.values.map((v) => ({ value: v })))), report.kpis.issuesValue);
   });
 
+  await t.test("indent vs received report", async () => {
+    const report = await ok("GET", "/reports/indent-vs-received");
+    const s = report.summary;
+    // Every line is in exactly one outcome.
+    assert.equal(Object.values(s.states).reduce((a, b) => a + b, 0), s.lines);
+    assert.equal(report.lines.length, s.lines);
+    // Received value ties back to the issue records.
+    const issued = report.lines.filter((l) => l.status === "ISSUED");
+    assert.ok(Math.abs(issued.reduce((a, l) => a + l.receivedValue, 0) - s.receivedValue) < 0.01);
+    // The 1000 kg onion requisition was approved but never issued (not enough stock): still waiting.
+    const onionWaiting = report.lines.find((l) => l.item === "Onion" && l.requested === 1000);
+    assert.equal(onionWaiting.state, "WAITING");
+    // Departments add up to the total; per-item quantities balance.
+    assert.ok(Math.abs(report.byDepartment.reduce((a, d) => a + d.indentValue, 0) - s.indentValue) < 0.01);
+    for (const i of report.byItem) {
+      assert.ok(Math.abs(i.requested - i.received - i.shortQty - i.waitingQty) < 0.001, i.name);
+    }
+    // Filters narrow the lines.
+    const waiting = await ok("GET", "/reports/indent-vs-received?status=APPROVED");
+    assert.ok(waiting.lines.every((l) => l.status === "APPROVED"));
+    assert.equal((await call("GET", "/reports/indent-vs-received?from=2026-02-01&to=2026-01-01")).status, 400);
+  });
+
   await t.test("dashboard summary", async () => {
     const dash = await ok("GET", "/reports/dashboard");
     assert.equal(dash.itemCount, 3);
@@ -464,7 +487,7 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       assert.equal((await call("GET", "/items")).status, 401);
       assert.equal((await staff("GET", "/items")).status, 200);
 
-      // Store staff can raise a requisition but not approve it.
+      // Staff can raise and follow requisitions, but not approve or issue them.
       const req = await staff("POST", "/requisitions", { outletDepartmentId: kitchen.id, items: [{ itemId: rice.id, quantity: 1 }] });
       assert.equal(req.status, 201);
       assert.equal(req.body.requestedBy, "user user");
@@ -472,12 +495,29 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       const approved = await approverUser("POST", `/requisitions/${req.body.id}/approve`);
       assert.equal(approved.status, 200);
       assert.equal(approved.body.approvedBy, "approver user");
-      assert.equal((await staff("POST", `/requisitions/${req.body.id}/issue`, {})).status, 200);
+      assert.equal((await staff("POST", `/requisitions/${req.body.id}/issue`, {})).status, 403);
+      assert.equal((await approverUser("POST", `/requisitions/${req.body.id}/issue`, {})).status, 200);
+      assert.equal((await staff("GET", `/requisitions/${req.body.id}`)).body.status, "ISSUED");
 
-      // Master data, stock corrections and direct purchases need an approver.
-      assert.equal((await staff("POST", "/stock/adjustments", { itemId: rice.id, quantityChange: 1, reason: "x" })).status, 403);
-      assert.equal((await staff("POST", "/vendors", { vendorName: "X" })).status, 403);
-      assert.equal((await staff("POST", "/replenishment/recalculate")).status, 403);
+      // Staff only reach requisitions, the item and department pickers and the indent report.
+      for (const path of ["/requisitions", "/departments", "/reports/indent-vs-received"]) {
+        assert.equal((await staff("GET", path)).status, 200, path);
+      }
+      for (const path of ["/reports/dashboard", "/reports/analytics", "/replenishment", "/purchase-orders", "/vendors", "/market/comparison", "/transactions", "/stock/outlets"]) {
+        assert.equal((await staff("GET", path)).status, 403, path);
+      }
+      for (const [method, path, body] of [
+        ["POST", "/stock/waste", { itemId: rice.id, quantity: 1, reason: "x" }],
+        ["POST", "/stock/adjustments", { itemId: rice.id, quantityChange: 1, reason: "x" }],
+        ["POST", "/purchase-orders", {}],
+        ["POST", "/market/prices", { itemId: rice.id, unitPrice: 1 }],
+        ["POST", "/vendors", { vendorName: "X" }],
+        ["POST", "/replenishment/recalculate"],
+      ]) {
+        assert.equal((await staff(method, path, body)).status, 403, `${method} ${path}`);
+      }
+      // Approvers keep their access.
+      assert.equal((await approverUser("GET", "/reports/dashboard")).status, 200);
     } finally {
       config.authDisabled = true;
     }

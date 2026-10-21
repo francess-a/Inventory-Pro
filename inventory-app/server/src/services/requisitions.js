@@ -169,6 +169,162 @@ const departmentConsumption = async ({ from, to } = {}) => {
   };
 };
 
+/**
+ * Indent vs received: what departments asked for (indented) against what the store issued to
+ * them, over requisitions raised in the period. Each line ends up in one state:
+ *   FULL     issued in full            SHORT    issued, but less than requested
+ *   REJECTED requisition rejected      WAITING  still pending approval or issue
+ * Values use the issue cost where the line was issued, otherwise the item's current average cost.
+ */
+const INDENT_STATES = ["FULL", "SHORT", "REJECTED", "WAITING"];
+const DAY_MS = 24 * 60 * 60 * 1000;
+const r2 = (n) => Math.round(n * 100) / 100;
+const pct = (part, whole) => (whole > 0 ? r2((part / whole) * 100) : null);
+
+const weekOf = (d) => {
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return monday.toISOString().slice(0, 10);
+};
+
+const departmentLabel = (d) =>
+  d.subDepartment === "NONE" ? d.mainOutlet.replace(/_/g, " ") : `${d.mainOutlet} / ${d.subDepartment.replace(/_/g, " ")}`;
+
+const indentVsReceived = async (query = {}) => {
+  const toDate = date(query.to, "to", { optional: true }) ?? new Date();
+  const fromDate = date(query.from, "from", { optional: true }) ?? new Date(toDate.getTime() - 30 * DAY_MS);
+  if (fromDate >= toDate) throw badRequest("from must be before to");
+  const where = {
+    createdAt: { gte: fromDate, lte: toDate },
+    ...(query.outletDepartmentId && { outletDepartmentId: uuid(query.outletDepartmentId, "outletDepartmentId") }),
+    ...(query.status && { status: query.status }),
+  };
+  const reqs = await prisma.requisition.findMany({
+    where,
+    include: {
+      department: true,
+      items: { include: { item: { select: { id: true, itemName: true, category: true, unitOfMeasure: true, costPrice: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const lines = [];
+  for (const req of reqs) {
+    for (const line of req.items) {
+      const requested = qty(line.quantityRequested);
+      const received = req.status === "ISSUED" ? qty(line.quantityIssued) : 0;
+      const unitCost = Number(line.unitCost ?? line.item.costPrice);
+      const state =
+        req.status === "REJECTED" ? "REJECTED" : req.status !== "ISSUED" ? "WAITING" : received >= requested ? "FULL" : "SHORT";
+      const shortQty = state === "SHORT" || state === "REJECTED" ? qty(requested - received) : 0;
+      lines.push({
+        requisitionId: req.id,
+        requisitionNumber: req.requisitionNumber,
+        createdAt: req.createdAt,
+        issuedAt: req.issuedAt,
+        status: req.status,
+        departmentId: req.outletDepartmentId,
+        department: departmentLabel(req.department),
+        requestedBy: req.requestedBy,
+        itemId: line.itemId,
+        item: line.item.itemName,
+        category: line.item.category.replace(/_/g, " "),
+        unit: line.item.unitOfMeasure,
+        requested,
+        received,
+        shortQty,
+        unitCost: r2(unitCost),
+        indentValue: r2(requested * unitCost),
+        receivedValue: r2(Number(line.issuedValue)),
+        shortValue: r2(shortQty * unitCost),
+        state,
+      });
+    }
+  }
+
+  // Totals for a group of lines. Fill rate counts only closed lines (issued or rejected), so
+  // requisitions still waiting don't drag it down.
+  const summarise = (rows) => {
+    const closed = rows.filter((l) => l.state !== "WAITING");
+    const reqIds = new Set(rows.map((l) => l.requisitionId));
+    const issuedReqs = new Map();
+    for (const l of rows) if (l.status === "ISSUED" && l.issuedAt) issuedReqs.set(l.requisitionId, l.issuedAt - l.createdAt);
+    const sum = (list, key) => r2(list.reduce((s, l) => s + l[key], 0));
+    const closedIndent = sum(closed, "indentValue");
+    return {
+      requisitions: reqIds.size,
+      lines: rows.length,
+      indentValue: sum(rows, "indentValue"),
+      receivedValue: sum(rows, "receivedValue"),
+      shortValue: sum(rows.filter((l) => l.state === "SHORT"), "shortValue"),
+      rejectedValue: sum(rows.filter((l) => l.state === "REJECTED"), "indentValue"),
+      waitingValue: sum(rows.filter((l) => l.state === "WAITING"), "indentValue"),
+      fillRateValue: pct(sum(closed, "receivedValue"), closedIndent),
+      linesInFullPct: pct(closed.filter((l) => l.state === "FULL").length, closed.length),
+      avgTurnaroundHours: issuedReqs.size ? r2([...issuedReqs.values()].reduce((s, ms) => s + ms, 0) / issuedReqs.size / 3600000) : null,
+      states: Object.fromEntries(INDENT_STATES.map((st) => [st, rows.filter((l) => l.state === st).length])),
+    };
+  };
+
+  const groupBy = (keyFn) => {
+    const map = new Map();
+    for (const l of lines) {
+      const key = keyFn(l);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(l);
+    }
+    return map;
+  };
+
+  const byDepartment = [...groupBy((l) => l.departmentId)]
+    .map(([id, rows]) => ({ id, name: rows[0].department, ...summarise(rows) }))
+    .sort((a, b) => b.indentValue - a.indentValue);
+
+  const byItem = [...groupBy((l) => l.itemId)]
+    .map(([id, rows]) => {
+      const sum = (key) => r2(rows.reduce((s, l) => s + l[key], 0));
+      const closed = rows.filter((l) => l.state !== "WAITING");
+      return {
+        id,
+        name: rows[0].item,
+        category: rows[0].category,
+        unit: rows[0].unit,
+        requested: qty(rows.reduce((s, l) => s + l.requested, 0)),
+        received: qty(rows.reduce((s, l) => s + l.received, 0)),
+        shortQty: qty(rows.reduce((s, l) => s + l.shortQty, 0)),
+        waitingQty: qty(rows.filter((l) => l.state === "WAITING").reduce((s, l) => s + l.requested, 0)),
+        indentValue: sum("indentValue"),
+        receivedValue: sum("receivedValue"),
+        shortValue: r2(rows.filter((l) => l.state !== "WAITING").reduce((s, l) => s + l.shortValue, 0)),
+        fillRateValue: pct(closed.reduce((s, l) => s + l.receivedValue, 0), closed.reduce((s, l) => s + l.indentValue, 0)),
+      };
+    })
+    .sort((a, b) => b.shortValue - a.shortValue || b.indentValue - a.indentValue);
+
+  const weekly = [...groupBy((l) => weekOf(l.createdAt))]
+    .map(([week, rows]) => {
+      const start = new Date(`${week}T00:00:00Z`);
+      return {
+        week,
+        partial: start < fromDate || start.getTime() + 7 * DAY_MS > toDate.getTime(),
+        indentValue: r2(rows.reduce((s, l) => s + l.indentValue, 0)),
+        receivedValue: r2(rows.reduce((s, l) => s + l.receivedValue, 0)),
+      };
+    })
+    .sort((a, b) => a.week.localeCompare(b.week));
+
+  return {
+    from: fromDate,
+    to: toDate,
+    summary: summarise(lines),
+    byDepartment,
+    byItem,
+    weekly,
+    lines: lines.slice(0, 1000),
+    totalLines: lines.length,
+  };
+};
+
 module.exports = {
   listRequisitions,
   getRequisition,
@@ -178,4 +334,5 @@ module.exports = {
   issueRequisition,
   issueInTx,
   departmentConsumption,
+  indentVsReceived,
 };

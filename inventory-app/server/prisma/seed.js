@@ -5,7 +5,7 @@
 //   npm run db:seed            (refuses to run if items already exist)
 //   npm run db:seed -- --reset (wipes all inventory data first)
 //
-// Also creates demo logins (admin@hotel.example, approver@hotel.example, store@hotel.example)
+// Also creates demo logins (admin@hotel.example, approver@hotel.example, staff@hotel.example)
 // with the password in SEED_PASSWORD (default "ChangeMe123!"). Change them before real use.
 
 const bcrypt = require("bcryptjs");
@@ -124,7 +124,7 @@ const main = async () => {
   for (const [name, email, role] of [
     ["Hotel Admin", "admin@hotel.example", "admin"],
     ["Purchase Manager", "approver@hotel.example", "approver"],
-    ["Store Keeper", "store@hotel.example", "user"],
+    ["Department Staff", "staff@hotel.example", "user"],
   ]) {
     await prisma.user.upsert({ where: { email }, update: {}, create: { name, email, role, passwordHash } });
   }
@@ -253,6 +253,14 @@ const main = async () => {
             if (rand() < 0.5) await tx.requisition.update({ where: { id: req.id }, data: { status: "APPROVED", approvedBy: "store manager", approvedAt: at(day, 10) } });
             continue;
           }
+          // Now and then the store manager rejects a requisition (duplicate, wrong department).
+          if (rand() < 0.02) {
+            await tx.requisition.update({
+              where: { id: req.id },
+              data: { status: "REJECTED", approvedBy: "store manager", approvedAt: at(day, 10), remarks: pick(["Duplicate request", "Raise under the correct department", "Not a store item"]) },
+            });
+            continue;
+          }
           await tx.requisition.update({ where: { id: req.id }, data: { status: "APPROVED", approvedBy: "store manager", approvedAt: at(day, 10) } });
           // Issue what is available; shortages are issued short.
           const issueLines = req.items.map((line) => {
@@ -325,7 +333,7 @@ const main = async () => {
     await adjustCentral(tx, { itemId: towel.id, quantityChange: -2, remarks: "Physical count variance" }).catch(() => {});
   });
 
-  console.log(`Demo logins: admin@hotel.example, approver@hotel.example, store@hotel.example / password "${password}"`);
+  console.log(`Demo logins: admin@hotel.example, approver@hotel.example, staff@hotel.example / password "${password}"`);
   console.log(
     `Seeded ${VENDORS.length} vendors, ${DEPARTMENTS.length} departments, ${ITEMS.length} items, ` +
       `${await prisma.purchaseOrder.count()} purchase orders, ${await prisma.requisition.count()} requisitions, ` +

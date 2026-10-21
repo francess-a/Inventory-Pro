@@ -9,8 +9,12 @@ import Vendors from "./pages/Vendors";
 import MarketPrices from "./pages/MarketPrices";
 import Users from "./pages/Users";
 import Reports from "./pages/Reports";
+import IndentReport from "./pages/IndentReport";
 import NavBar from "./components/NavBar";
 import ProtectedRoute from "./components/ProtectedRoute";
+
+const MANAGERS = ["approver", "admin"];
+const EVERYONE = ["user", "approver", "admin"];
 
 function App() {
   return (
@@ -18,70 +22,20 @@ function App() {
       <NavBar />
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/stock"
-          element={
-            <ProtectedRoute>
-              <Stock />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/purchases"
-          element={
-            <ProtectedRoute>
-              <Purchases />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/requisitions"
-          element={
-            <ProtectedRoute>
-              <Requisitions />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/vendors"
-          element={
-            <ProtectedRoute>
-              <Vendors />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/market"
-          element={
-            <ProtectedRoute>
-              <MarketPrices />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/users"
-          element={
-            <ProtectedRoute>
-              <Users />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            <ProtectedRoute>
-              <Reports />
-            </ProtectedRoute>
-          }
-        />
+        {/* Staff ("user") only see requisitions and the indent report; the rest is for approvers and admins. */}
+        {[
+          ["/", <Dashboard />, MANAGERS],
+          ["/stock", <Stock />, MANAGERS],
+          ["/purchases", <Purchases />, MANAGERS],
+          ["/requisitions", <Requisitions />, EVERYONE],
+          ["/indent-report", <IndentReport />, EVERYONE],
+          ["/vendors", <Vendors />, MANAGERS],
+          ["/market", <MarketPrices />, MANAGERS],
+          ["/reports", <Reports />, MANAGERS],
+          ["/users", <Users />, ["admin"]],
+        ].map(([path, page, roles]) => (
+          <Route key={path} path={path} element={<ProtectedRoute roles={roles}>{page}</ProtectedRoute>} />
+        ))}
         {/* Superseded pages of the original app: items -> stock, indents -> requisitions. */}
         <Route path="/items" element={<Navigate to="/stock" replace />} />
         <Route path="/indents" element={<Navigate to="/requisitions" replace />} />
