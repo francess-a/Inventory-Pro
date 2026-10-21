@@ -77,6 +77,7 @@ export default function Users() {
         <label>&nbsp;<button type="submit" className="primary">Add user</button></label>
       </form>
 
+      <div className="table-wrap">
       <table className="data">
         <thead>
           <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Since</th><th /></tr>
@@ -104,6 +105,7 @@ export default function Users() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
