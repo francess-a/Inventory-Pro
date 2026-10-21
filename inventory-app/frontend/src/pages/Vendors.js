@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { num, ratioPct, date, label } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
@@ -16,7 +16,7 @@ export default function Vendors() {
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
-    hotelApi
+    api
       .get("/vendors/scorecards")
       .then((res) => setCards(res.data))
       .catch((err) => setError(errorMessage(err, "Unable to load vendors")));
@@ -29,7 +29,7 @@ export default function Vendors() {
   const openDetail = async (vendorId) => {
     if (detail?.vendor.id === vendorId) return setDetail(null);
     try {
-      setDetail((await hotelApi.get(`/vendors/${vendorId}/scorecard`)).data);
+      setDetail((await api.get(`/vendors/${vendorId}/scorecard`)).data);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -38,7 +38,7 @@ export default function Vendors() {
   const save = async (e) => {
     e.preventDefault();
     try {
-      await hotelApi.post("/vendors", form);
+      await api.post("/vendors", form);
       setForm(EMPTY_VENDOR);
       setShowAdd(false);
       load();

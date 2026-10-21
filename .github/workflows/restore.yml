@@ -8,5 +8,5 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: nightly-backup
-      - name: Restore MongoDB
-        run: mongorestore --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz --drop
+      - name: Restore PostgreSQL
+        run: pg_restore --clean --if-exists --no-owner --dbname="${{ secrets.DATABASE_URL }}" backup.dump

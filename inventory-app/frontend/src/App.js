@@ -7,6 +7,7 @@ import Purchases from "./pages/Purchases";
 import Requisitions from "./pages/Requisitions";
 import Vendors from "./pages/Vendors";
 import MarketPrices from "./pages/MarketPrices";
+import Users from "./pages/Users";
 import NavBar from "./components/NavBar";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -61,6 +62,14 @@ function App() {
           element={
             <ProtectedRoute>
               <MarketPrices />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/users"
+          element={
+            <ProtectedRoute>
+              <Users />
             </ProtectedRoute>
           }
         />

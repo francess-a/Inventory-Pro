@@ -25,6 +25,7 @@ export default function NavBar() {
         <NavLink to="/requisitions">Requisitions</NavLink>
         <NavLink to="/vendors">Vendors</NavLink>
         <NavLink to="/market">Market Prices</NavLink>
+        {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
       </div>
       <div className="nav-actions">
         {user ? (

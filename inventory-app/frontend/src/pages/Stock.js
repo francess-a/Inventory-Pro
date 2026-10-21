@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { money, num, label } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
@@ -24,7 +24,7 @@ export default function Stock() {
 
   const load = useCallback(async () => {
     try {
-      const [plan, vendorList] = await Promise.all([hotelApi.get("/replenishment"), hotelApi.get("/vendors")]);
+      const [plan, vendorList] = await Promise.all([api.get("/replenishment"), api.get("/vendors")]);
       setRows(plan.data);
       setVendors(vendorList.data);
       setError("");
@@ -54,7 +54,7 @@ export default function Stock() {
 
   const recalculate = async () => {
     try {
-      const res = await hotelApi.post("/replenishment/recalculate");
+      const res = await api.post("/replenishment/recalculate");
       setMessage(`Levels recalculated for ${res.data.levelsUpdated} items; ABC/XYZ updated for ${res.data.itemsUpdated}.`);
       load();
     } catch (err) {
@@ -65,7 +65,7 @@ export default function Stock() {
   const generatePurchaseOrders = async () => {
     try {
       const itemIds = selected.size ? [...selected] : undefined;
-      const res = await hotelApi.post("/replenishment/purchase-orders", { itemIds });
+      const res = await api.post("/replenishment/purchase-orders", { itemIds });
       const unassigned = res.data.unassigned.length ? ` ${res.data.unassigned.length} item(s) have no vendor.` : "";
       setMessage(`Created ${res.data.created.length} draft purchase order(s): ${res.data.created.map((p) => p.poNumber).join(", ")}.${unassigned}`);
       setSelected(new Set());
@@ -78,7 +78,7 @@ export default function Stock() {
   const addItem = async (e) => {
     e.preventDefault();
     try {
-      await hotelApi.post("/items", { ...newItem, preferredVendorId: newItem.preferredVendorId || null });
+      await api.post("/items", { ...newItem, preferredVendorId: newItem.preferredVendorId || null });
       setNewItem(EMPTY_ITEM);
       setShowAdd(false);
       setMessage("Item added.");

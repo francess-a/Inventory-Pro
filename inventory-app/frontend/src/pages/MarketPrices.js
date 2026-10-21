@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { money, pct, date, label } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
@@ -13,7 +13,7 @@ function PriceEntry({ items, vendors, onSaved, onError }) {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await hotelApi.post("/market/prices", {
+      await api.post("/market/prices", {
         itemId: form.itemId,
         vendorId: form.vendorId || undefined,
         unitPrice: form.unitPrice,
@@ -54,7 +54,7 @@ function Trend({ itemId }) {
   const [trend, setTrend] = useState(null);
 
   useEffect(() => {
-    hotelApi.get(`/market/items/${itemId}/trend`, { params: { days } }).then((res) => setTrend(res.data)).catch(() => setTrend(null));
+    api.get(`/market/items/${itemId}/trend`, { params: { days } }).then((res) => setTrend(res.data)).catch(() => setTrend(null));
   }, [itemId, days]);
 
   // Merge each series' daily points into one row per date for recharts.
@@ -132,7 +132,7 @@ export default function MarketPrices() {
 
   const load = useCallback(async () => {
     try {
-      const [cmp, v] = await Promise.all([hotelApi.get("/market/comparison"), hotelApi.get("/vendors")]);
+      const [cmp, v] = await Promise.all([api.get("/market/comparison"), api.get("/vendors")]);
       setRows(cmp.data);
       setVendors(v.data);
     } catch (err) {
@@ -146,7 +146,7 @@ export default function MarketPrices() {
 
   const syncFeed = async () => {
     try {
-      const res = await hotelApi.post("/market/feed/sync");
+      const res = await api.post("/market/feed/sync");
       setMessage(`Imported ${res.data.imported} market prices.`);
       load();
     } catch (err) {

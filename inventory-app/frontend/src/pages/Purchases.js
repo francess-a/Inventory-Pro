@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { money, date, label, qty } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
@@ -26,7 +26,7 @@ function NewPurchase({ vendors, items, onCreated, onError }) {
     e.preventDefault();
     try {
       const body = { vendorId, items: lines.filter((l) => l.itemId), ...(direct && { invoiceNumber }) };
-      const res = await hotelApi.post(direct ? "/purchase-orders/direct" : "/purchase-orders", body);
+      const res = await api.post(direct ? "/purchase-orders/direct" : "/purchase-orders", body);
       setLines([emptyLine()]);
       setInvoiceNumber("");
       onCreated(res.data);
@@ -108,7 +108,7 @@ function ReceiveForm({ po, onDone, onError }) {
 
   const submit = async () => {
     try {
-      await hotelApi.post(`/purchase-orders/${po.id}/receive`, {
+      await api.post(`/purchase-orders/${po.id}/receive`, {
         invoiceNumber: invoiceNumber || undefined,
         lines: lines
           .filter((l) => l.outstanding > 0)
@@ -171,9 +171,9 @@ export default function Purchases() {
   const load = useCallback(async () => {
     try {
       const [po, v, it] = await Promise.all([
-        hotelApi.get("/purchase-orders", { params: { status: status || undefined, vendorId: vendorFilter || undefined } }),
-        hotelApi.get("/vendors"),
-        hotelApi.get("/items"),
+        api.get("/purchase-orders", { params: { status: status || undefined, vendorId: vendorFilter || undefined } }),
+        api.get("/vendors"),
+        api.get("/items"),
       ]);
       setOrders(po.data);
       setVendors(v.data);
@@ -189,7 +189,7 @@ export default function Purchases() {
 
   const act = async (po, action) => {
     try {
-      await hotelApi.post(`/purchase-orders/${po.id}/${action}`);
+      await api.post(`/purchase-orders/${po.id}/${action}`);
       setMessage(`${po.poNumber}: ${action === "send" ? "sent to supplier" : "cancelled"}.`);
       load();
     } catch (err) {

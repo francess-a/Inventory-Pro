@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { money, num, date, departmentName, label } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
@@ -15,7 +15,7 @@ function NewRequisition({ departments, items, onCreated, onError }) {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      const res = await hotelApi.post("/requisitions", {
+      const res = await api.post("/requisitions", {
         outletDepartmentId,
         requestedBy: requestedBy || undefined,
         items: lines.filter((l) => l.itemId),
@@ -87,7 +87,7 @@ function IssueForm({ requisition, stockByItem, onDone, onError }) {
 
   const submit = async () => {
     try {
-      await hotelApi.post(`/requisitions/${requisition.id}/issue`, {
+      await api.post(`/requisitions/${requisition.id}/issue`, {
         lines: Object.entries(quantities).map(([requisitionItemId, quantityIssued]) => ({
           requisitionItemId,
           quantityIssued: Number(quantityIssued) || 0,
@@ -144,7 +144,7 @@ function Consumption() {
   const [open, setOpen] = useState(null);
 
   useEffect(() => {
-    hotelApi
+    api
       .get("/reports/department-consumption", { params: { from: range.from, to: `${range.to}T23:59:59` } })
       .then((res) => setReport(res.data))
       .catch(() => setReport(null));
@@ -200,9 +200,9 @@ export default function Requisitions() {
   const load = useCallback(async () => {
     try {
       const [reqs, depts, its] = await Promise.all([
-        hotelApi.get("/requisitions", { params: { status: status || undefined, outletDepartmentId: departmentFilter || undefined } }),
-        hotelApi.get("/departments"),
-        hotelApi.get("/items"),
+        api.get("/requisitions", { params: { status: status || undefined, outletDepartmentId: departmentFilter || undefined } }),
+        api.get("/departments"),
+        api.get("/items"),
       ]);
       setRequisitions(reqs.data);
       setDepartments(depts.data);
@@ -220,7 +220,7 @@ export default function Requisitions() {
 
   const decide = async (req, action) => {
     try {
-      await hotelApi.post(`/requisitions/${req.id}/${action}`, {});
+      await api.post(`/requisitions/${req.id}/${action}`, {});
       setMessage(`${req.requisitionNumber} ${action === "approve" ? "approved" : "rejected"}.`);
       load();
     } catch (err) {

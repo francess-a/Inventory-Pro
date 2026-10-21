@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import hotelApi, { errorMessage } from "../services/hotelApi";
+import api, { errorMessage } from "../services/api";
 import { money, departmentName } from "../utils/format";
 
 const Kpi = ({ label, value, alert, to }) => (
@@ -16,7 +16,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    hotelApi
+    api
       .get("/reports/dashboard")
       .then((res) => setData(res.data))
       .catch((err) => setError(errorMessage(err, "Unable to load dashboard")));

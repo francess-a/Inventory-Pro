@@ -6,10 +6,10 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - name: Dump MongoDB
-        run: mongodump --uri="${{ secrets.MONGO_URI }}" --archive=backup.gz
+      - name: Dump PostgreSQL
+        run: pg_dump --format=custom --no-owner --file=backup.dump "${{ secrets.DATABASE_URL }}"
       - name: Upload Backup
         uses: actions/upload-artifact@v4
         with:
           name: nightly-backup
-          path: backup.gz
+          path: backup.dump
