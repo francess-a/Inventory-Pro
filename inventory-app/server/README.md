@@ -71,7 +71,7 @@ cd inventory-app
 npm run install:all                     # server + frontend dependencies
 cp server/.env.example server/.env      # set DATABASE_URL and JWT_SECRET
 npm run db:migrate                      # create / update tables
-npm run db:seed                         # optional: demo hotel with ~120 days of history
+npm run db:seed                         # optional: demo hotel with ~200 days of history
 npm run build                           # build the web app
 npm start                               # app + API on http://localhost:5100
 ```

@@ -321,6 +321,20 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.equal(Number(draft.items[0].quantityOrdered), 800 - Number((await central(rice.id)).quantityOnHand));
   });
 
+  await t.test("short-closing a partly delivered order stops it counting as on order", async () => {
+    let po = await ok("POST", "/purchase-orders", { vendorId: metro.id, items: [{ itemId: rice.id, quantity: 40, unitPrice: 85 }] });
+    assert.equal((await call("POST", `/purchase-orders/${po.id}/close`)).status, 409, "DRAFT cannot be closed short");
+    po = await ok("POST", `/purchase-orders/${po.id}/send`);
+    po = await ok("POST", `/purchase-orders/${po.id}/receive`, { lines: [{ poItemId: po.items[0].id, quantityReceived: 30 }] });
+    assert.equal(po.status, "PARTIALLY_RECEIVED");
+    const onOrder = async () => (await ok("GET", "/replenishment")).find((r) => r.itemId === rice.id).onOrder;
+    assert.equal(await onOrder(), 10);
+    po = await ok("POST", `/purchase-orders/${po.id}/close`, { reason: "supplier out of stock" });
+    assert.equal(po.status, "RECEIVED");
+    assert.match(po.notes, /Closed short \(supplier out of stock\)/);
+    assert.equal(await onOrder(), 0);
+  });
+
   await t.test("reports analytics agree with the transaction log", async () => {
     const report = await ok("GET", "/reports/analytics");
     const sum = (rows) => Math.round(rows.reduce((s, r) => s + r.value, 0) * 100) / 100;
@@ -353,7 +367,29 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.deepEqual(turns, [...turns].sort((a, b) => b - a));
     assert.ok(report.fastMoving.length <= 25 && report.nonMoving.length <= 25);
     assert.ok(Array.isArray(report.insights));
-    for (const i of report.insights) assert.ok(["high", "medium", "low"].includes(i.severity) && i.title && i.action);
+    for (const i of report.insights) {
+      assert.ok(["high", "medium", "low"].includes(i.severity) && i.title && i.action);
+      assert.ok(["daily", "monthly"].includes(i.horizon));
+    }
+    for (const h of ["daily", "monthly"]) assert.ok(report.insights.filter((i) => i.horizon === h).length <= 20);
+    // Approved requisitions waiting to be issued show up as a daily action.
+    assert.ok(report.insights.some((i) => i.type === "PENDING_APPROVALS" || i.type === "ISSUE_APPROVED" || i.type === "REORDER_TODAY"));
+
+    // Spend lists: most descending, least ascending, both from the same receipts.
+    const spend = report.topSpend.map((r) => r.value);
+    assert.deepEqual(spend, [...spend].sort((a, b) => b - a));
+    const least = report.leastSpend.map((r) => r.value);
+    assert.deepEqual(least, [...least].sort((a, b) => a - b));
+    assert.equal(sum(report.topSpend), report.kpis.purchasesValue); // fewer than 30 items here
+    assert.equal(report.topSpend[report.topSpend.length - 1].cumulativePct, 100);
+
+    // Department comparison: this period sums to total issues; no previous data in a fresh database.
+    assert.equal(sum(report.departmentComparison.map((d) => ({ value: d.current }))), report.kpis.issuesValue);
+    assert.equal(report.previousPeriod.complete, false);
+    assert.ok(report.departmentComparison.every((d) => d.changePct === null && d.previous === null));
+    const heat = report.departmentCategory;
+    assert.equal(heat.rows.length, report.departmentComparison.length);
+    assert.equal(sum(heat.rows.flatMap((r) => r.values.map((v) => ({ value: v })))), report.kpis.issuesValue);
   });
 
   await t.test("dashboard summary", async () => {

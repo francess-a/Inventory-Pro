@@ -51,6 +51,7 @@ button.link { background: none; border: none; color: #3538cd; cursor: pointer; p
 .report-card-actions { display: flex; gap: 4px; white-space: nowrap; }
 .report-chart { margin-top: 8px; }
 .report-table { max-height: 360px; }
+.report-table.full { max-height: none; }
 .empty { padding: 32px 0; text-align: center; }
 .viz-tooltip { background: #fff; border: 1px solid rgba(11, 11, 11, 0.1); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
 .viz-tooltip-title { color: #52514e; margin-bottom: 4px; }
@@ -75,3 +76,15 @@ button.link { background: none; border: none; color: #3538cd; cursor: pointer; p
 .insight-impact { margin-left: auto; }
 .insight-title { font-weight: 600; }
 @media (max-width: 900px) { .insight-list { grid-template-columns: 1fr; } }
+.report-section { grid-column: 1 / -1; margin-top: 12px; border-bottom: 1px solid #e1e0d9; }
+.report-section h3 { margin: 0; font-size: 18px; }
+.report-section p { margin: 2px 0 8px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid #e1e0d9; margin: 8px 0; }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer; color: #52514e; }
+.tab.active { border-bottom-color: #3538cd; color: #0b0b0b; font-weight: 600; }
+.insight-rank { font-weight: 700; color: #52514e; min-width: 18px; }
+.heatmap .heat-cell { font-variant-numeric: tabular-nums; }
+.heat-legend { display: flex; align-items: center; gap: 2px; margin-top: 8px; font-size: 12px; }
+.heat-legend span { display: inline-block; width: 22px; height: 10px; }
+.heat-legend span:first-of-type { margin-left: 6px; }
+.heat-legend span:last-of-type { margin-right: 6px; }

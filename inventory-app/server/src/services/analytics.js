@@ -86,7 +86,10 @@ const analytics = async ({ from, to } = {}) => {
   if (fromDate >= toDate) throw badRequest("from must be before to");
   const days = Math.max(1, (toDate - fromDate) / DAY_MS);
 
-  const [txns, departments, vendors, plan, scorecards, reqLines, poCounts, items, lastIssues] = await Promise.all([
+  // The previous period of the same length, for period-on-period comparisons.
+  const prevFrom = new Date(fromDate.getTime() - (toDate - fromDate));
+
+  const [txns, departments, vendors, plan, scorecards, reqLines, poCounts, items, lastIssues, prevTxns, reqCounts, outletWaste, firstTxn] = await Promise.all([
     prisma.inventoryTransaction.findMany({
       where: { timestamp: { gte: fromDate, lt: toDate } },
       select: {
@@ -119,7 +122,26 @@ const analytics = async ({ from, to } = {}) => {
     prisma.item.findMany({ select: { id: true, itemName: true, category: true, unitOfMeasure: true, costPrice: true } }),
     // Last time each item was issued, ever (for non-moving stock).
     prisma.inventoryTransaction.groupBy({ by: ["itemId"], where: { type: "OUTLET_ISSUE" }, _max: { timestamp: true } }),
+    prisma.inventoryTransaction.findMany({
+      where: { timestamp: { gte: prevFrom, lt: fromDate }, type: { in: ["PURCHASE_RECEIPT", "OUTLET_ISSUE"] } },
+      select: { itemId: true, type: true, destinationLocation: true, transactionValue: true },
+    }),
+    prisma.requisition.groupBy({
+      by: ["outletDepartmentId"],
+      where: { createdAt: { gte: fromDate, lt: toDate } },
+      _count: { _all: true },
+    }),
+    // Waste written off inside outlets, per department.
+    prisma.inventoryTransaction.groupBy({
+      by: ["sourceLocation"],
+      where: { type: "WASTE", sourceLocation: { not: "CENTRAL" }, timestamp: { gte: fromDate, lt: toDate } },
+      _sum: { transactionValue: true },
+    }),
+    prisma.inventoryTransaction.aggregate({ _min: { timestamp: true } }),
   ]);
+  // Period-on-period changes are only meaningful when the log covers the whole previous period
+  // (not, for example, in the first months after going live).
+  const previousComplete = Boolean(firstTxn._min.timestamp && firstTxn._min.timestamp <= prevFrom);
 
   const value = (t) => Number(t.transactionValue);
   const receipts = txns.filter((t) => t.type === "PURCHASE_RECEIPT");
@@ -312,6 +334,110 @@ const analytics = async ({ from, to } = {}) => {
 
   const requested = reqLines.reduce((s, l) => s + Number(l.quantityRequested), 0);
   const issuedQty = reqLines.reduce((s, l) => s + Number(l.quantityIssued), 0);
+  const pctChange = (now, before) => (previousComplete && before ? round2(((now - before) / before) * 100) : null);
+
+  // ── Purchase spend per item: top 30 most and 30 least ───────────────────
+  const prevReceipts = prevTxns.filter((t) => t.type === "PURCHASE_RECEIPT");
+  const prevSpend = sumBy(prevReceipts, (t) => t.itemId, value);
+  const spendStats = new Map();
+  for (const t of receipts) {
+    const st = spendStats.get(t.itemId) ?? { spend: 0, qty: 0, vendors: new Set(), receipts: 0 };
+    st.spend += value(t);
+    st.qty += Number(t.quantity);
+    st.vendors.add(t.sourceLocation);
+    st.receipts += 1;
+    spendStats.set(t.itemId, st);
+  }
+  const totalSpend = total(receipts);
+  let cumulative = 0;
+  const spendItems = [...spendStats]
+    .map(([id, st]) => {
+      const item = itemById.get(id);
+      return {
+        name: item.itemName,
+        category: item.category.replace(/_/g, " "),
+        unit: item.unitOfMeasure,
+        value: round2(st.spend),
+        quantity: round2(st.qty),
+        avgPrice: st.qty ? round2(st.spend / st.qty) : null,
+        receipts: st.receipts,
+        suppliers: st.vendors.size,
+        previous: previousComplete ? round2(prevSpend.get(id) ?? 0) : null,
+        changePct: pctChange(st.spend, prevSpend.get(id) ?? 0),
+      };
+    })
+    .sort((a, b) => b.value - a.value)
+    .map((r) => {
+      cumulative += r.value;
+      return { ...r, sharePct: totalSpend ? round2((r.value / totalSpend) * 100) : null, cumulativePct: totalSpend ? round2((cumulative / totalSpend) * 100) : null };
+    });
+  const topSpend = spendItems.slice(0, 30);
+  const leastSpend = [...spendItems].reverse().slice(0, 30);
+  const noPurchaseItems = items.filter((i) => !spendStats.has(i.id)).length;
+
+  // ── Department comparison ─────────────────────────────────────────────────
+  const prevIssues = prevTxns.filter((t) => t.type === "OUTLET_ISSUE");
+  const prevByDept = sumBy(prevIssues, (t) => t.destinationLocation, value);
+  const nowByDept = sumBy(issues, (t) => t.destinationLocation, value);
+  const reqCountByDept = new Map(reqCounts.map((r) => [r.outletDepartmentId, r._count._all]));
+  const outletWasteByDept = new Map(outletWaste.map((r) => [r.sourceLocation, Number(r._sum.transactionValue ?? 0)]));
+  const fillByDept = new Map(fulfilment.map((f) => [f.name, f.value]));
+  const totalIssues = total(issues);
+  const departmentComparison = departments
+    .map((d) => {
+      const name = departmentName(d);
+      const current = nowByDept.get(d.id) ?? 0;
+      const previous = prevByDept.get(d.id) ?? 0;
+      const requisitions = reqCountByDept.get(d.id) ?? 0;
+      const wasteValue = outletWasteByDept.get(d.id) ?? 0;
+      return {
+        id: d.id,
+        name,
+        outlet: d.mainOutlet.replace(/_/g, " "),
+        current: round2(current),
+        previous: previousComplete ? round2(previous) : null,
+        changePct: pctChange(current, previous),
+        sharePct: totalIssues ? round2((current / totalIssues) * 100) : null,
+        perDay: round2(current / days),
+        requisitions,
+        avgRequisition: requisitions ? round2(current / requisitions) : null,
+        fillRate: fillByDept.get(name) ?? null,
+        outletWaste: round2(wasteValue),
+      };
+    })
+    .filter((d) => d.current || d.previous)
+    .sort((a, b) => b.current - a.current);
+
+  // Department × category matrix of issued value (heat-map).
+  const categoryTotals = sumBy(issues, (t) => t.item.category, value);
+  const matrixCategories = [...categoryTotals.keys()].sort((a, b) => categoryTotals.get(b) - categoryTotals.get(a));
+  const cell = sumBy(issues, (t) => `${t.destinationLocation}|${t.item.category}`, value);
+  const departmentCategory = {
+    categories: matrixCategories.map((c) => c.replace(/_/g, " ")),
+    rows: departmentComparison.map((d) => ({
+      name: d.name,
+      values: matrixCategories.map((c) => round2(cell.get(`${d.id}|${c}`) ?? 0)),
+    })),
+  };
+
+  // Weekly issues per main outlet (few enough series for one line chart).
+  const outletById = new Map(departments.map((d) => [d.id, d.mainOutlet.replace(/_/g, " ")]));
+  const outletTotals = sumBy(issues, (t) => outletById.get(t.destinationLocation) ?? "Unknown", value);
+  const outletWeeks = new Map();
+  for (const t of issues) {
+    const key = weekKey(t.timestamp);
+    const row = outletWeeks.get(key) ?? { week: key };
+    const outlet = outletById.get(t.destinationLocation) ?? "Unknown";
+    row[outlet] = (row[outlet] ?? 0) + value(t);
+    outletWeeks.set(key, row);
+  }
+  const partialWeeks = new Set(weekly.filter((w) => w.partial).map((w) => w.week));
+  const weeklyByOutlet = {
+    outlets: [...outletTotals.keys()].sort((a, b) => outletTotals.get(b) - outletTotals.get(a)),
+    rows: [...outletWeeks.values()]
+      .sort((a, b) => a.week.localeCompare(b.week))
+      .map((r) => ({ ...Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "number" ? round2(v) : v])), partial: partialWeeks.has(r.week) })),
+  };
 
   return {
     from: fromDate,
@@ -352,7 +478,14 @@ const analytics = async ({ from, to } = {}) => {
     fastMoving,
     nonMoving,
     fsnSummary,
-    insights: await buildInsights({ movement, plan, scorecards, cogs, days }),
+    topSpend,
+    leastSpend,
+    noPurchaseItems,
+    departmentComparison,
+    departmentCategory,
+    weeklyByOutlet,
+    previousPeriod: { from: prevFrom, to: fromDate, complete: previousComplete },
+    insights: await buildInsights({ movement, plan, scorecards, cogs, days, spendItems, departmentComparison, toDate }),
   };
 };
 

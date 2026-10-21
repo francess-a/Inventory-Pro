@@ -49,6 +49,9 @@ router.post("/purchase-orders/:id/receive", async (req, res) =>
   res.json(await purchasing.receivePurchaseOrder(req.params.id, req.body))
 );
 router.post("/purchase-orders/:id/cancel", approver, async (req, res) => res.json(await purchasing.cancelPurchaseOrder(req.params.id)));
+router.post("/purchase-orders/:id/close", approver, async (req, res) =>
+  res.json(await purchasing.closePurchaseOrder(req.params.id, req.body?.reason))
+);
 
 // Requisitions (department indents -> issues)
 router.get("/requisitions", async (req, res) => res.json(await requisitions.listRequisitions(req.query)));

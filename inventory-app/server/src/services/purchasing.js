@@ -174,6 +174,29 @@ const cancelPurchaseOrder = async (id) =>
   });
 
 /**
+ * Short-closes a partially received order: the undelivered balance is no longer expected,
+ * so it stops counting as "on order" for replenishment. The shortfall stays on the lines
+ * (ordered vs received), so supplier fill rates still reflect it.
+ */
+const closeInTx = async (tx, id, reason) => {
+  const po = await tx.purchaseOrder.findUnique({ where: { id }, include: { items: true } });
+  if (!po) throw notFound("Purchase order");
+  if (po.status !== "PARTIALLY_RECEIVED") throw conflict(`Only PARTIALLY_RECEIVED orders can be closed short (status is ${po.status})`);
+  const short = po.items
+    .map((l) => ({ l, missing: qty(Number(l.quantityOrdered) - Number(l.quantityReceived) - Number(l.quantityRejected)) }))
+    .filter((x) => x.missing > 0);
+  const note = `Closed short${reason ? ` (${reason})` : ""}: ${short.length} line${short.length === 1 ? "" : "s"} not delivered in full.`;
+  return tx.purchaseOrder.update({
+    where: { id },
+    data: { status: "RECEIVED", notes: po.notes ? `${po.notes}\n${note}` : note },
+    include: PO_INCLUDE,
+  });
+};
+
+const closePurchaseOrder = async (id, reason) =>
+  withTotals(await run((tx) => closeInTx(tx, uuid(id, "id"), text(reason, "reason", { optional: true }))));
+
+/**
  * Direct purchase entry (cash / market purchase, or an invoice with no prior PO):
  * creates, sends and fully receives an order in one step.
  */
@@ -221,6 +244,8 @@ module.exports = {
   sendPurchaseOrder,
   receivePurchaseOrder,
   cancelPurchaseOrder,
+  closePurchaseOrder,
+  closeInTx,
   createDirectPurchase,
   openOrderQuantities,
   createInTx,

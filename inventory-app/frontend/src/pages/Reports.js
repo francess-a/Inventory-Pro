@@ -107,7 +107,7 @@ function ChartCard({ title, subtitle, columns, rows, wide, tableOnly, children }
       {rows.length === 0 ? (
         <p className="muted empty">No data in this period.</p>
       ) : showTable ? (
-        <div className="table-wrap report-table">
+        <div className={`table-wrap report-table${tableOnly ? " full" : ""}`}>
           <table className="data">
             <thead>
               <tr>{columns.map((c) => <th key={c.key} className={c.numeric ? "num" : ""}>{c.label}</th>)}</tr>
@@ -252,39 +252,111 @@ const SEVERITY = {
   low: { label: "Low", className: "OK" },
 };
 
-function Insights({ insights, costPct, targetCostPct }) {
+const signedPct = (v) => (v === null || v === undefined ? "–" : `${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`);
+
+// Department × category heat-map: one sequential hue, light (little) to dark (a lot).
+const HEAT_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+function Heatmap({ matrix }) {
+  const max = Math.max(1, ...matrix.rows.flatMap((r) => r.values));
+  const step = (v) => Math.min(HEAT_RAMP.length - 1, Math.floor((v / max) * HEAT_RAMP.length));
+  return (
+    <div className="table-wrap heatmap">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Department</th>
+            {matrix.categories.map((c) => <th key={c} className="num">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {matrix.rows.map((r) => (
+            <tr key={r.name}>
+              <td>{r.name}</td>
+              {r.values.map((v, i) => {
+                const s = step(v);
+                return (
+                  <td
+                    key={matrix.categories[i]}
+                    className="num heat-cell"
+                    title={`${r.name} · ${matrix.categories[i]}: ${money(v)}`}
+                    style={v > 0 ? { background: HEAT_RAMP[s], color: s >= 3 ? "#fff" : "#0b0b0b" } : undefined}
+                  >
+                    {v > 0 ? compactMoney(v) : "–"}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="heat-legend muted">
+        less
+        {HEAT_RAMP.map((c) => <span key={c} style={{ background: c }} />)}
+        more (up to {compactMoney(max)})
+      </div>
+    </div>
+  );
+}
+
+const HORIZONS = [
+  ["daily", "Daily actions", "What to do today, from current stock, orders, requisitions and this week's prices"],
+  ["monthly", "Monthly improvements", "Supplier, price, waste and department changes from the selected period"],
+];
+
+function Suggestions({ insights, costPct, targetCostPct }) {
+  const [horizon, setHorizon] = useState("daily");
   const [showAll, setShowAll] = useState(false);
   const extra =
     costPct !== null && costPct > targetCostPct
       ? [{
+          horizon: "monthly",
           severity: "high",
           category: "Cost of goods",
           title: `Cost of goods is ${pct(costPct)} of revenue, above the ${targetCostPct}% target`,
           detail: "Measured as cost of goods ÷ the revenue entered for this period.",
-          action: "Review recipe costing and portion sizes for the highest-consumption items, act on the price insights below, and cut waste.",
+          action: "Review recipe costing and portion sizes for the highest-consumption items, act on the price suggestions, and cut waste.",
           impact: null,
         }]
       : [];
   const all = [...extra, ...insights];
-  const shown = showAll ? all : all.slice(0, 6);
+  const list = all.filter((i) => i.horizon === horizon).slice(0, 20);
+  const shown = showAll ? list : list.slice(0, 8);
+  const [, , description] = HORIZONS.find(([key]) => key === horizon);
   return (
     <section className="card insights">
       <header className="report-card-head">
         <div>
-          <h3>Insights &amp; recommendations</h3>
+          <h3>Top 20 actionable suggestions</h3>
           <p className="muted">
-            From market price trends, supplier prices, stock levels, waste and supplier performance; savings are
-            estimated over the next 30 days at current usage.
+            {description}. Money figures are estimates at current usage; market trends are as current as the prices recorded.
           </p>
         </div>
       </header>
-      {all.length === 0 ? (
-        <p className="muted empty">Nothing needs attention in this period.</p>
+      <div className="tabs" role="tablist">
+        {HORIZONS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={horizon === key}
+            className={horizon === key ? "tab active" : "tab"}
+            onClick={() => {
+              setHorizon(key);
+              setShowAll(false);
+            }}
+          >
+            {label} ({Math.min(20, all.filter((i) => i.horizon === key).length)})
+          </button>
+        ))}
+      </div>
+      {list.length === 0 ? (
+        <p className="muted empty">Nothing needs attention.</p>
       ) : (
-        <ul className="insight-list">
+        <ol className="insight-list">
           {shown.map((i, n) => (
             <li key={n} className="insight">
               <div className="insight-head">
+                <span className="insight-rank">{n + 1}</span>
                 <span className={`badge ${SEVERITY[i.severity].className}`}>{SEVERITY[i.severity].label}</span>
                 <span className="muted">{i.category}</span>
                 {i.impact !== null && i.impact !== undefined && (
@@ -298,11 +370,11 @@ function Insights({ insights, costPct, targetCostPct }) {
               <div><strong>Action:</strong> {i.action}</div>
             </li>
           ))}
-        </ul>
+        </ol>
       )}
-      {all.length > 6 && (
+      {list.length > 8 && (
         <button type="button" className="link" onClick={() => setShowAll(!showAll)}>
-          {showAll ? "Show fewer" : `Show all ${all.length}`}
+          {showAll ? "Show fewer" : `Show all ${list.length}`}
         </button>
       )}
     </section>
@@ -351,6 +423,38 @@ export default function Reports() {
   const k = data?.kpis;
   const costPct = k && Number(revenue) > 0 ? (k.cogs / Number(revenue)) * 100 : null;
   const weekLabel = (w) => `Week of ${date(w)}`;
+  const prevComplete = Boolean(data?.previousPeriod?.complete);
+  const spendColumns = [
+    { key: "name", label: "Item" },
+    { key: "category", label: "Category" },
+    { key: "quantity", label: "Quantity", numeric: true, format: (v) => num(v, 3) },
+    { key: "unit", label: "Unit" },
+    { key: "avgPrice", label: "Avg price", numeric: true, format: money },
+    { key: "value", label: "Spend", numeric: true, format: money },
+    { key: "sharePct", label: "Share", numeric: true, format: (v) => pct(v) },
+    { key: "cumulativePct", label: "Cumulative", numeric: true, format: (v) => pct(v) },
+    { key: "suppliers", label: "Suppliers", numeric: true },
+    { key: "previous", label: "Previous period", numeric: true, format: money },
+    { key: "changePct", label: "Change", numeric: true, format: signedPct },
+  ];
+  const deptColumns = [
+    { key: "name", label: "Department" },
+    { key: "current", label: "Issued", numeric: true, format: money },
+    { key: "previous", label: "Previous period", numeric: true, format: money },
+    { key: "changePct", label: "Change", numeric: true, format: signedPct },
+    { key: "sharePct", label: "Share", numeric: true, format: (v) => pct(v) },
+    { key: "perDay", label: "Per day", numeric: true, format: money },
+    { key: "requisitions", label: "Requisitions", numeric: true },
+    { key: "avgRequisition", label: "Avg requisition", numeric: true, format: money },
+    { key: "fillRate", label: "Fill rate", numeric: true, format: (v) => pct(v) },
+    { key: "outletWaste", label: "Waste in outlet", numeric: true, format: money },
+  ];
+  const heatRows = data
+    ? data.departmentCategory.rows.map((r) => ({
+        name: r.name,
+        ...Object.fromEntries(data.departmentCategory.categories.map((c, i) => [c, r.values[i]])),
+      }))
+    : [];
 
   return (
     <div className="page reports">
@@ -403,9 +507,14 @@ export default function Reports() {
             <Kpi label="Non-moving stock" value={money(k.nonMovingValue)} note="no issues in the period" />
           </div>
 
-          <Insights insights={data.insights} costPct={costPct} targetCostPct={targetCostPct} />
+          <Suggestions insights={data.insights} costPct={costPct} targetCostPct={targetCostPct} />
 
           <div className="report-grid">
+            <div className="report-section">
+              <h3>Cost of goods</h3>
+              <p className="muted">Opening stock, purchases, closing stock and what was consumed</p>
+            </div>
+
             <ChartCard
               wide
               title="Cost of goods: opening to closing stock"
@@ -447,6 +556,11 @@ export default function Reports() {
               ]}
             />
 
+            <div className="report-section">
+              <h3>Purchasing & spend</h3>
+              <p className="muted">Where the money goes and how suppliers perform</p>
+            </div>
+
             <ChartCard
               wide
               title="Purchases vs issues by week"
@@ -474,49 +588,23 @@ export default function Reports() {
             </ChartCard>
 
             <ChartCard
-              wide
-              title="Central stock value"
-              subtitle="Value of stock on hand in the central store at the end of each day"
-              rows={data.stockValue}
-              columns={[
-                { key: "date", label: "Date", format: date },
-                { key: "value", label: "Stock value", numeric: true, format: money },
-              ]}
+              title="Top 30 items by purchase spend"
+              subtitle="Highest value of goods received in the period"
+              rows={data.topSpend}
+              columns={spendColumns}
             >
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={data.stockValue} margin={{ top: 8, right: 40, left: 8, bottom: 4 }}>
-                  <CartesianGrid vertical={false} stroke={INK.grid} />
-                  <XAxis dataKey="date" {...axisProps} tickFormatter={(d) => date(d)} minTickGap={32} />
-                  <YAxis {...axisProps} axisLine={false} tickFormatter={compactMoney} width={72} domain={[0, "auto"]} />
-                  <Tooltip content={<ValueTooltip labelFormat={date} />} cursor={{ stroke: INK.axis }} />
-                  <ReferenceLine y={k.averageStockValue} stroke={INK.muted} strokeDasharray="4 4" label={{ value: "average", fill: INK.muted, fontSize: 11, position: "insideTopRight" }} />
-                  <Area type="linear" dataKey="value" name="Stock value" stroke={SEQUENTIAL} strokeWidth={2} fill={SEQUENTIAL} fillOpacity={0.12} />
-                </AreaChart>
-              </ResponsiveContainer>
+              <RankedBars data={data.topSpend} />
             </ChartCard>
 
             <ChartCard
-              title="Issues by department"
-              subtitle="Value issued from the central store"
-              rows={data.byDepartment}
-              columns={[
-                { key: "name", label: "Department" },
-                { key: "value", label: "Issued value", numeric: true, format: money },
-              ]}
+              title="30 items with the lowest purchase spend"
+              subtitle={`Lowest value received among items bought in the period${
+                data.noPurchaseItems ? `; ${data.noPurchaseItems} more item${data.noPurchaseItems > 1 ? "s" : ""} had no purchases` : ""
+              }`}
+              rows={data.leastSpend}
+              columns={spendColumns}
             >
-              <RankedBars data={data.byDepartment} />
-            </ChartCard>
-
-            <ChartCard
-              title="Consumption by category"
-              subtitle="Share of issued value; smaller categories grouped as Other"
-              rows={data.byCategory}
-              columns={[
-                { key: "name", label: "Category" },
-                { key: "value", label: "Issued value", numeric: true, format: money },
-              ]}
-            >
-              <Donut data={data.byCategory} colors={(d, i) => (d.name === "Other" ? OTHER : SERIES[i])} />
+              <RankedBars data={data.leastSpend} />
             </ChartCard>
 
             <ChartCard
@@ -555,17 +643,125 @@ export default function Reports() {
               </ResponsiveContainer>
             </ChartCard>
 
+            <div className="report-section">
+              <h3>Departments</h3>
+              <p className="muted">Department-wise comparison of consumption, growth and service</p>
+            </div>
+
             <ChartCard
-              title="ABC analysis"
-              subtitle="Share of annual consumption value by class (A = top 80%)"
-              rows={data.abc}
+              wide
+              title="Department comparison: this period vs previous"
+              subtitle={
+                prevComplete
+                  ? `Value issued to each department, ${date(data.previousPeriod.from)} – ${date(data.previousPeriod.to)} shown in grey for comparison`
+                  : "Value issued to each department (no comparison: the system has no data for the whole previous period yet)"
+              }
+              rows={data.departmentComparison}
+              columns={deptColumns}
+            >
+              <ResponsiveContainer width="100%" height={Math.max(260, data.departmentComparison.length * (prevComplete ? 40 : 28) + 60)}>
+                <BarChart data={data.departmentComparison} layout="vertical" margin={{ top: 4, right: 72, left: 8, bottom: 4 }} barGap={2} barCategoryGap={8}>
+                  <CartesianGrid horizontal={false} stroke={INK.grid} />
+                  <XAxis type="number" {...axisProps} tickFormatter={compactMoney} />
+                  <YAxis type="category" dataKey="name" width={170} {...axisProps} axisLine={false} interval={0} />
+                  <Tooltip cursor={{ fill: "rgba(42,120,214,0.08)" }} content={<ValueTooltip />} />
+                  {prevComplete && <Legend iconType="square" wrapperStyle={{ fontSize: 12 }} />}
+                  <Bar dataKey="current" name="This period" fill={SERIES[0]} radius={[0, 4, 4, 0]} maxBarSize={14}
+                    label={{ position: "right", fill: "#52514e", fontSize: 11, formatter: (v) => compactMoney(v) }} />
+                  {prevComplete && <Bar dataKey="previous" name="Previous period" fill={OTHER} radius={[0, 4, 4, 0]} maxBarSize={14} />}
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartCard>
+
+            <ChartCard
+              wide
+              tableOnly
+              title="Department scorecard"
+              subtitle="Consumption, growth, share, requisitions, fill rate and waste written off inside each department"
+              rows={data.departmentComparison}
+              columns={deptColumns}
+            />
+
+            <ChartCard
+              wide
+              title="What each department consumes"
+              subtitle="Issued value by department and category; darker = more"
+              rows={heatRows}
+              columns={[{ key: "name", label: "Department" }, ...data.departmentCategory.categories.map((c) => ({ key: c, label: c, numeric: true, format: money }))]}
+            >
+              <Heatmap matrix={data.departmentCategory} />
+            </ChartCard>
+
+            <ChartCard
+              wide
+              title="Weekly issues by outlet"
+              subtitle="Value issued per week to each main outlet (full weeks)"
+              rows={data.weeklyByOutlet.rows}
+              columns={[{ key: "week", label: "Week of", format: date }, ...data.weeklyByOutlet.outlets.map((o) => ({ key: o, label: o, numeric: true, format: money }))]}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={data.weeklyByOutlet.rows.filter((w) => !w.partial)} margin={{ top: 8, right: 40, left: 8, bottom: 4 }}>
+                  <CartesianGrid vertical={false} stroke={INK.grid} />
+                  <XAxis dataKey="week" {...axisProps} tickFormatter={(w) => date(w)} minTickGap={24} />
+                  <YAxis {...axisProps} axisLine={false} tickFormatter={compactMoney} width={72} />
+                  <Tooltip content={<ValueTooltip labelFormat={(w) => `Week of ${date(w)}`} />} cursor={{ stroke: INK.axis }} />
+                  <Legend iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
+                  {data.weeklyByOutlet.outlets.slice(0, SERIES.length).map((o, i) => (
+                    <Line key={o} type="linear" dataKey={o} name={o} stroke={SERIES[i]} strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartCard>
+
+            <ChartCard
+              title="Consumption by category"
+              subtitle="Share of issued value; smaller categories grouped as Other"
+              rows={data.byCategory}
               columns={[
-                { key: "name", label: "Class" },
-                { key: "items", label: "Items", numeric: true },
-                { key: "value", label: "Annual consumption value", numeric: true, format: money },
+                { key: "name", label: "Category" },
+                { key: "value", label: "Issued value", numeric: true, format: money },
               ]}
             >
-              <Donut data={data.abc} colors={(d, i) => SERIES[i]} />
+              <Donut data={data.byCategory} colors={(d, i) => (d.name === "Other" ? OTHER : SERIES[i])} />
+            </ChartCard>
+
+            <ChartCard
+              title="Requisition fill rate by department"
+              subtitle="Quantity issued ÷ quantity requested on issued requisitions, lowest first"
+              rows={data.fulfilment}
+              columns={[
+                { key: "name", label: "Department" },
+                { key: "value", label: "Fill rate %", numeric: true, format: (v) => pct(v) },
+              ]}
+            >
+              <RankedBars data={data.fulfilment} format={(v) => pct(v)} domain={[0, 100]} target={95} />
+            </ChartCard>
+
+            <div className="report-section">
+              <h3>Stock</h3>
+              <p className="muted">Stock value, status and how items move</p>
+            </div>
+
+            <ChartCard
+              wide
+              title="Central stock value"
+              subtitle="Value of stock on hand in the central store at the end of each day"
+              rows={data.stockValue}
+              columns={[
+                { key: "date", label: "Date", format: date },
+                { key: "value", label: "Stock value", numeric: true, format: money },
+              ]}
+            >
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={data.stockValue} margin={{ top: 8, right: 40, left: 8, bottom: 4 }}>
+                  <CartesianGrid vertical={false} stroke={INK.grid} />
+                  <XAxis dataKey="date" {...axisProps} tickFormatter={(d) => date(d)} minTickGap={32} />
+                  <YAxis {...axisProps} axisLine={false} tickFormatter={compactMoney} width={72} domain={[0, "auto"]} />
+                  <Tooltip content={<ValueTooltip labelFormat={date} />} cursor={{ stroke: INK.axis }} />
+                  <ReferenceLine y={k.averageStockValue} stroke={INK.muted} strokeDasharray="4 4" label={{ value: "average", fill: INK.muted, fontSize: 11, position: "insideTopRight" }} />
+                  <Area type="linear" dataKey="value" name="Stock value" stroke={SEQUENTIAL} strokeWidth={2} fill={SEQUENTIAL} fillOpacity={0.12} />
+                </AreaChart>
+              </ResponsiveContainer>
             </ChartCard>
 
             <ChartCard
@@ -581,31 +777,16 @@ export default function Reports() {
             </ChartCard>
 
             <ChartCard
-              title="Top 10 items by consumption"
-              subtitle="Highest issued value"
-              rows={data.topConsumption}
+              title="ABC analysis"
+              subtitle="Share of annual consumption value by class (A = top 80%)"
+              rows={data.abc}
               columns={[
-                { key: "name", label: "Item" },
-                { key: "quantity", label: "Quantity", numeric: true, format: (v) => num(v, 3) },
-                { key: "unit", label: "Unit" },
-                { key: "value", label: "Issued value", numeric: true, format: money },
+                { key: "name", label: "Class" },
+                { key: "items", label: "Items", numeric: true },
+                { key: "value", label: "Annual consumption value", numeric: true, format: money },
               ]}
             >
-              <RankedBars data={data.topConsumption} />
-            </ChartCard>
-
-            <ChartCard
-              title="Top 10 waste items"
-              subtitle="Value written off (central store and outlets)"
-              rows={data.topWaste}
-              columns={[
-                { key: "name", label: "Item" },
-                { key: "quantity", label: "Quantity", numeric: true, format: (v) => num(v, 3) },
-                { key: "unit", label: "Unit" },
-                { key: "value", label: "Waste value", numeric: true, format: money },
-              ]}
-            >
-              <RankedBars data={data.topWaste} />
+              <Donut data={data.abc} colors={(d, i) => SERIES[i]} />
             </ChartCard>
 
             <ChartCard
@@ -666,16 +847,31 @@ export default function Reports() {
             </ChartCard>
 
             <ChartCard
-              wide
-              title="Requisition fill rate by department"
-              subtitle="Quantity issued ÷ quantity requested on issued requisitions, lowest first"
-              rows={data.fulfilment}
+              title="Top 10 items by consumption"
+              subtitle="Highest issued value"
+              rows={data.topConsumption}
               columns={[
-                { key: "name", label: "Department" },
-                { key: "value", label: "Fill rate %", numeric: true, format: (v) => pct(v) },
+                { key: "name", label: "Item" },
+                { key: "quantity", label: "Quantity", numeric: true, format: (v) => num(v, 3) },
+                { key: "unit", label: "Unit" },
+                { key: "value", label: "Issued value", numeric: true, format: money },
               ]}
             >
-              <RankedBars data={data.fulfilment} format={(v) => pct(v)} domain={[0, 100]} target={95} />
+              <RankedBars data={data.topConsumption} />
+            </ChartCard>
+
+            <ChartCard
+              title="Top 10 waste items"
+              subtitle="Value written off (central store and outlets)"
+              rows={data.topWaste}
+              columns={[
+                { key: "name", label: "Item" },
+                { key: "quantity", label: "Quantity", numeric: true, format: (v) => num(v, 3) },
+                { key: "unit", label: "Unit" },
+                { key: "value", label: "Waste value", numeric: true, format: money },
+              ]}
+            >
+              <RankedBars data={data.topWaste} />
             </ChartCard>
           </div>
         </div>

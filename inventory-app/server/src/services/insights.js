@@ -1,18 +1,23 @@
-// Rule-based business insights for the Reports page. Each insight names the problem or
-// opportunity, recommends an action and, where it can, estimates the money involved over
-// the next 30 days (based on current usage). Market trends come from the price history
-// (goods receipts, vendor quotes and market rates), so they are as current as that data.
+// Actionable suggestions for the Reports page, split by horizon:
+//   daily   – what to do today, from the live state of stock, orders, requisitions and prices;
+//   monthly – structural improvements from the selected period (suppliers, waste, departments).
+// Each suggestion names the problem, the action and, where possible, the money involved.
+// Market trends come from recorded prices (receipts, quotes, market feed), so they are as
+// current as that data.
 const prisma = require("../db");
 const config = require("../config");
 const { DAY_MS, mean } = require("../lib/planning");
 const { priceComparison } = require("./market");
 
 const PERISHABLE = new Set(["VEGETABLE", "DAIRY", "PORK", "CHICKEN", "BEEF", "BIRDS", "MUTTON", "SEAFOOD"]);
+const PER_HORIZON = 20;
 const round2 = (n) => Math.round(n * 100) / 100;
+const money30 = (perDay) => round2(perDay * 30);
+const fmt = (n) =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: config.currency, maximumFractionDigits: 2 }).format(n);
 
-// Market price change per item: average of the last 7 days vs the same window a month earlier.
-// Uses market rates where an item has them, otherwise all price sources.
-const marketTrends = async (now = Date.now()) => {
+// Average recorded price per item over a few windows, preferring market rates where present.
+const priceWindows = async (now) => {
   const quotes = await prisma.priceQuote.findMany({
     where: { recordedAt: { gte: new Date(now - 45 * DAY_MS) } },
     select: { itemId: true, source: true, unitPrice: true, recordedAt: true },
@@ -22,155 +27,323 @@ const marketTrends = async (now = Date.now()) => {
     if (!byItem.has(q.itemId)) byItem.set(q.itemId, []);
     byItem.get(q.itemId).push(q);
   }
-  const avgBetween = (rows, fromDaysAgo, toDaysAgo) => {
-    const values = rows
-      .filter((q) => {
-        const age = (now - q.recordedAt.getTime()) / DAY_MS;
-        return age <= fromDaysAgo && age > toDaysAgo;
-      })
-      .map((q) => Number(q.unitPrice));
-    return values.length ? mean(values) : null;
-  };
-  const trends = new Map();
+  const result = new Map();
   for (const [itemId, rows] of byItem) {
     const market = rows.filter((q) => q.source === "MARKET_FEED");
     const ref = market.length ? market : rows;
-    const current = avgBetween(ref, 7, 0);
-    const monthAgo = avgBetween(ref, 37, 30);
-    if (current !== null && monthAgo) {
-      trends.set(itemId, { current, monthAgo, changePct: ((current - monthAgo) / monthAgo) * 100 });
-    }
+    const avg = (fromDaysAgo, toDaysAgo) => {
+      const v = ref
+        .filter((q) => {
+          const age = (now - q.recordedAt.getTime()) / DAY_MS;
+          return age <= fromDaysAgo && age > toDaysAgo;
+        })
+        .map((q) => Number(q.unitPrice));
+      return v.length ? mean(v) : null;
+    };
+    result.set(itemId, { last2d: avg(2, 0), prior7d: avg(9, 2), last7d: avg(7, 0), monthAgo: avg(37, 30) });
   }
-  return trends;
+  return result;
 };
 
-const money30 = (perDay) => round2(perDay * 30);
-const fmt = (n) =>
-  new Intl.NumberFormat("en-IN", { style: "currency", currency: config.currency, maximumFractionDigits: 2 }).format(n);
+const change = (now, before) => (now !== null && before ? ((now - before) / before) * 100 : null);
 
-/**
- * @param movement    per-item rows from analytics (usage, stock, FSN)
- * @param plan        replenishment plan rows (status, levels, vendor)
- * @param scorecards  Map of vendor scorecards
- */
-const buildInsights = async ({ movement, plan, scorecards, cogs, days }) => {
-  const [trends, comparison] = await Promise.all([marketTrends(), priceComparison({ days: 30 })]);
-  const planById = new Map(plan.map((r) => [r.itemId, r]));
+const dailySuggestions = async ({ movement, plan, departmentComparison, prices, now }) => {
+  const out = [];
+  const add = (s) => out.push({ horizon: "daily", impact: null, ...s });
+  const byItem = new Map(movement.map((m) => [m.itemId, m]));
+  const isShort = (r) => ["OUT_OF_STOCK", "BELOW_SAFETY_STOCK"].includes(r.status);
+
+  // 1. Purchase orders to send today, one suggestion per supplier.
+  const bySupplier = new Map();
+  for (const r of plan.filter((p) => p.needsReorder)) {
+    const key = r.vendorName ?? "No supplier set";
+    bySupplier.set(key, [...(bySupplier.get(key) ?? []), r]);
+  }
+  for (const [vendor, rows] of bySupplier) {
+    add({
+      type: "REORDER_TODAY",
+      category: "Purchasing",
+      title: `Send a purchase order to ${vendor}: ${rows.length} item${rows.length > 1 ? "s" : ""} at reorder point`,
+      detail: rows.map((r) => `${r.itemName} ${r.suggestedOrderQty} ${r.unitOfMeasure}`).join(", ") + ".",
+      action:
+        vendor === "No supplier set"
+          ? "Set a preferred supplier on these items, then raise the order."
+          : "On the Stock page, select these items, create the draft PO and send it.",
+      impact: round2(rows.reduce((s, r) => s + r.suggestedOrderValue, 0)),
+      impactLabel: "order value",
+      severity: rows.some(isShort) ? "high" : "medium",
+    });
+  }
+
+  // 2. Stock-outs with nothing on order and no reorder suggestion.
+  for (const r of plan) {
+    if (!isShort(r) || r.onOrder > 0 || r.needsReorder || !(r.avgDailyUsage > 0)) continue;
+    add({
+      type: "STOCKOUT_RISK",
+      category: "Stock levels",
+      title: `${r.itemName}: ${r.status === "OUT_OF_STOCK" ? "out of stock" : "below safety stock"} with nothing on order`,
+      detail: `On hand ${r.centralOnHand} ${r.unitOfMeasure}, using about ${r.avgDailyUsage} per day.`,
+      action: `Order about ${Math.ceil(r.avgDailyUsage * (r.leadTimeDays + 7))} ${r.unitOfMeasure} today.`,
+      severity: "high",
+    });
+  }
+
+  // 3. Late deliveries.
+  const urgentIds = new Set(plan.filter(isShort).map((r) => r.itemId));
+  const overdue = await prisma.purchaseOrder.findMany({
+    where: { status: { in: ["SENT", "PARTIALLY_RECEIVED"] }, expectedDeliveryAt: { lt: new Date(now - DAY_MS / 2) } },
+    include: { vendor: { select: { vendorName: true, phone: true } }, items: { select: { itemId: true, quantityOrdered: true, quantityReceived: true, quantityRejected: true } } },
+    orderBy: { expectedDeliveryAt: "asc" },
+    take: 10,
+  });
+  for (const po of overdue) {
+    const daysLate = Math.floor((now - po.expectedDeliveryAt.getTime()) / DAY_MS);
+    const hasUrgent = po.items.some((l) => urgentIds.has(l.itemId));
+    if (po.status === "PARTIALLY_RECEIVED") {
+      const shortLines = po.items.filter((l) => Number(l.quantityOrdered) - Number(l.quantityReceived) - Number(l.quantityRejected) > 0).length;
+      add({
+        type: "SHORT_DELIVERY",
+        category: "Suppliers",
+        title: `${po.poNumber} from ${po.vendor.vendorName}: balance of ${shortLines} line${shortLines > 1 ? "s" : ""} still not delivered`,
+        detail: `Part-delivered; the rest was due ${po.expectedDeliveryAt.toISOString().slice(0, 10)} (${daysLate} day${daysLate === 1 ? "" : "s"} ago) and still counts as on order.`,
+        action: `Ask ${po.vendor.vendorName} (${po.vendor.phone}) whether the balance is coming; if not, use "Close short" on the Purchases page so reorders aren't held back.`,
+        severity: hasUrgent || daysLate > 7 ? "high" : "medium",
+      });
+      continue;
+    }
+    add({
+      type: "OVERDUE_DELIVERY",
+      category: "Suppliers",
+      title: `${po.poNumber} from ${po.vendor.vendorName} is ${daysLate > 0 ? `${daysLate} day${daysLate > 1 ? "s" : ""}` : "half a day"} late`,
+      detail: `Expected ${po.expectedDeliveryAt.toISOString().slice(0, 10)}; ${po.items.length} line${po.items.length > 1 ? "s" : ""}${hasUrgent ? ", including items that are short now" : ""}.`,
+      action: `Call ${po.vendor.vendorName} (${po.vendor.phone}) for a delivery time; if they can't deliver today, buy the urgent items elsewhere.`,
+      severity: hasUrgent ? "high" : "medium",
+    });
+  }
+
+  // 4. Requisitions waiting on the store.
+  const [pending, approved] = await Promise.all([
+    prisma.requisition.findMany({ where: { status: "PENDING" }, select: { createdAt: true }, orderBy: { createdAt: "asc" } }),
+    prisma.requisition.count({ where: { status: "APPROVED" } }),
+  ]);
+  if (pending.length) {
+    const hours = Math.max(0, Math.round((now - pending[0].createdAt.getTime()) / 3600000));
+    add({
+      type: "PENDING_APPROVALS",
+      category: "Requisitions",
+      title: `${pending.length} requisition${pending.length > 1 ? "s" : ""} waiting for approval`,
+      detail: `The oldest has waited ${hours} hour${hours === 1 ? "" : "s"}.`,
+      action: "Approve or reject them on the Requisitions page so departments aren't kept waiting.",
+      severity: hours >= 12 ? "high" : "medium",
+    });
+  }
+  if (approved) {
+    add({
+      type: "ISSUE_APPROVED",
+      category: "Requisitions",
+      title: `${approved} approved requisition${approved > 1 ? "s" : ""} not yet issued`,
+      detail: "Departments are waiting for this stock.",
+      action: "Issue them from the central store on the Requisitions page.",
+      severity: "medium",
+    });
+  }
+
+  // 5. This week's price moves on perishables: buy more or less today.
+  for (const [itemId, p] of prices) {
+    const m = byItem.get(itemId);
+    if (!m || !(m.avgDailyUsage > 0) || !PERISHABLE.has(m.category.replace(/ /g, "_"))) continue;
+    const pct = change(p.last2d, p.prior7d);
+    if (pct === null || Math.abs(pct) < 8) continue;
+    add({
+      type: pct > 0 ? "PRICE_UP_TODAY" : "PRICE_DOWN_TODAY",
+      category: "Market trend",
+      title: `${m.name}: market price ${pct > 0 ? "up" : "down"} ${Math.abs(pct).toFixed(1)}% vs last week`,
+      detail: `About ${fmt(p.last2d)} per ${m.unit} in the last 2 days vs ${fmt(p.prior7d)} the week before.`,
+      action:
+        pct > 0
+          ? "Buy only today's need, ask suppliers to hold last week's price, and promote dishes that use cheaper alternatives."
+          : "Good day to buy: cover the next few days if storage allows, and check suppliers pass the lower price on.",
+      impact: round2(Math.abs(p.last2d - p.prior7d) * m.avgDailyUsage * 3),
+      impactLabel: pct > 0 ? "extra cost over 3 days" : "saving over 3 days",
+    });
+  }
+
+  // 6. Perishables with more stock than they should have: use first.
+  for (const r of plan) {
+    if (!PERISHABLE.has(r.category) || r.status !== "OVERSTOCK" || !(r.avgDailyUsage > 0)) continue;
+    add({
+      type: "USE_FIRST",
+      category: "Waste",
+      title: `${r.itemName}: ${(r.centralOnHand / r.avgDailyUsage).toFixed(1)} days of perishable stock on hand`,
+      detail: `${r.centralOnHand} ${r.unitOfMeasure} vs maximum ${r.maxStock}.`,
+      action: "Issue the oldest stock first, suggest it to the kitchen as today's special, and skip the next order.",
+      impact: round2((r.centralOnHand - r.maxStock) * r.costPrice),
+      impactLabel: "stock at risk of spoiling",
+    });
+  }
+
+  // 7. Department usage spikes: last 24 hours vs the department's daily average.
+  const recent = await prisma.inventoryTransaction.groupBy({
+    by: ["destinationLocation"],
+    where: { type: "OUTLET_ISSUE", timestamp: { gte: new Date(now - DAY_MS), lt: new Date(now) } },
+    _sum: { transactionValue: true },
+  });
+  const deptById = new Map(departmentComparison.map((d) => [d.id, d]));
+  for (const r of recent) {
+    const d = deptById.get(r.destinationLocation);
+    const last24h = Number(r._sum.transactionValue ?? 0);
+    if (!d || !(d.perDay > 0) || last24h < d.perDay * 1.5) continue;
+    add({
+      type: "DEPT_SPIKE",
+      category: "Departments",
+      title: `${d.name}: issues in the last 24 hours are ${(last24h / d.perDay).toFixed(1)}× its daily average`,
+      detail: `${fmt(last24h)} vs an average of ${fmt(d.perDay)} per day.`,
+      action: "Check with the department head whether this matches business (banquets, occupancy) or points to over-requisitioning.",
+      impact: round2(last24h - d.perDay),
+      impactLabel: "above the daily average",
+    });
+  }
+  return out;
+};
+
+const monthlySuggestions = async ({ movement, plan, scorecards, days, spendItems, departmentComparison, prices }) => {
+  const out = [];
+  const add = (s) => out.push({ horizon: "monthly", impact: null, ...s });
+  const comparison = await priceComparison({ days: 30 });
   const cmpById = new Map(comparison.map((r) => [r.id, r]));
-  const insights = [];
-  const add = (insight) => insights.push({ impact: null, ...insight });
+  const planById = new Map(plan.map((r) => [r.itemId, r]));
 
   for (const m of movement) {
     const usagePerDay = m.avgDailyUsage;
-    const planRow = planById.get(m.itemId);
     const cmp = cmpById.get(m.itemId);
-    const trend = trends.get(m.itemId);
+    const p = prices.get(m.itemId);
+    const trendPct = p ? change(p.last7d, p.monthAgo) : null;
     const perishable = PERISHABLE.has(m.category.replace(/ /g, "_"));
 
-    // Market moving up: act before the next purchase.
-    if (trend && usagePerDay > 0 && trend.changePct >= 5) {
-      add({
-        type: "MARKET_RISING",
-        category: "Market trend",
-        item: m.name,
-        title: `${m.name}: market price up ${trend.changePct.toFixed(1)}% in a month`,
-        detail: `Now about ${fmt(trend.current)} per ${m.unit} vs ${fmt(trend.monthAgo)} a month ago.`,
-        action: perishable
-          ? "Agree a fixed price with the supplier for the next few weeks, review menu costing for dishes using it, and consider substitutes."
-          : "Storable item: buy up to maximum stock now at today's price, before further increases.",
-        impact: money30(usagePerDay * (trend.current - trend.monthAgo)),
-        impactLabel: "extra cost over 30 days if the trend holds",
-      });
-    }
-    // Paying above market / above the cheapest supplier.
+    // Paying above the best supplier / market price.
     let aboveMarket = false;
     if (cmp && usagePerDay > 0) {
       const cheapest = Math.min(...[cmp.marketPrice, cmp.bestVendorPrice].filter((v) => v !== null && v > 0));
       const gapPct = Number.isFinite(cheapest) && cmp.costPrice > 0 ? ((cmp.costPrice - cheapest) / cheapest) * 100 : 0;
       if (gapPct >= 8) {
         aboveMarket = true;
-        const falling = trend && trend.changePct <= -5;
+        const falling = trendPct !== null && trendPct <= -5;
         const cheaperVendor = cmp.bestVendorPrice !== null && cmp.bestVendorPrice <= cheapest + 0.01 ? cmp.bestVendor?.vendorName : null;
         add({
           type: "ABOVE_MARKET",
           category: "Purchasing",
-          item: m.name,
           title: `${m.name}: our cost is ${gapPct.toFixed(1)}% above the best available price`,
           detail:
             `Average cost ${fmt(cmp.costPrice)} vs ${fmt(cheapest)}${cheaperVendor ? ` from ${cheaperVendor}` : " at market"}.` +
-            (falling ? ` Part of the gap is because the market fell ${Math.abs(trend.changePct).toFixed(1)}% this month and older, dearer stock is still being used.` : ""),
+            (falling ? ` Part of the gap is because the market fell ${Math.abs(trendPct).toFixed(1)}% this month and older, dearer stock is still being used.` : ""),
           action:
             (cheaperVendor
               ? `Move orders to ${cheaperVendor} or use their price to renegotiate with the current supplier.`
               : "Renegotiate with the supplier using current market rates, or buy part of the need at market.") +
             (falling ? " Keep order sizes small while prices are falling." : ""),
           impact: money30(usagePerDay * (cmp.costPrice - cheapest)),
-          impactLabel: "potential saving over 30 days",
+          impactLabel: "potential saving per month",
         });
       }
     }
-    // Market moving down: don't lock in old prices.
-    if (!aboveMarket && trend && usagePerDay > 0 && trend.changePct <= -5) {
+    // Month-on-month market trend.
+    if (p && trendPct !== null && usagePerDay > 0 && trendPct >= 5) {
+      add({
+        type: "MARKET_RISING",
+        category: "Market trend",
+        title: `${m.name}: market price up ${trendPct.toFixed(1)}% in a month`,
+        detail: `Now about ${fmt(p.last7d)} per ${m.unit} vs ${fmt(p.monthAgo)} a month ago.`,
+        action: perishable
+          ? "Agree a fixed price with the supplier for the coming month, review menu costing for dishes using it, and consider substitutes."
+          : "Storable item: buy up to maximum stock now at today's price, before further increases.",
+        impact: money30(usagePerDay * (p.last7d - p.monthAgo)),
+        impactLabel: "extra cost per month if the trend holds",
+      });
+    }
+    if (!aboveMarket && p && trendPct !== null && usagePerDay > 0 && trendPct <= -5) {
       add({
         type: "MARKET_FALLING",
         category: "Market trend",
-        item: m.name,
-        title: `${m.name}: market price down ${Math.abs(trend.changePct).toFixed(1)}% in a month`,
-        detail: `Now about ${fmt(trend.current)} per ${m.unit} vs ${fmt(trend.monthAgo)} a month ago.`,
-        action: "Buy only what's needed until prices settle, and ask suppliers to pass the lower price on.",
-        impact: money30(usagePerDay * (trend.monthAgo - trend.current)),
-        impactLabel: "potential saving over 30 days",
+        title: `${m.name}: market price down ${Math.abs(trendPct).toFixed(1)}% in a month`,
+        detail: `Now about ${fmt(p.last7d)} per ${m.unit} vs ${fmt(p.monthAgo)} a month ago.`,
+        action: "Ask suppliers to pass the lower price on, and avoid long fixed-price commitments for now.",
+        impact: money30(usagePerDay * (p.monthAgo - p.last7d)),
+        impactLabel: "potential saving per month",
       });
     }
-    // Overstock: stock above the maximum level ties up cash and (for perishables) risks waste.
-    if (planRow && planRow.status === "OVERSTOCK" && planRow.maxStock > 0) {
+    // Waste hotspots.
+    if (m.issuedValue > 0 && m.wasteValue / m.issuedValue >= 0.03) {
+      add({
+        type: "WASTE",
+        category: "Waste",
+        title: `${m.name}: waste is ${((m.wasteValue / m.issuedValue) * 100).toFixed(1)}% of issues`,
+        detail: `Written off ${fmt(m.wasteValue)} vs ${fmt(m.issuedValue)} issued in the period.`,
+        action: perishable
+          ? "Order smaller quantities more often, enforce FIFO, and check storage temperature and handling."
+          : "Check storage and handling; reduce order sizes.",
+        impact: money30(m.wasteValue / days),
+        impactLabel: "waste cost per month",
+      });
+    }
+    // Non-perishable overstock (perishable overstock is a daily "use first" action).
+    const planRow = planById.get(m.itemId);
+    if (planRow && !perishable && planRow.status === "OVERSTOCK" && planRow.maxStock > 0) {
       const excess = planRow.centralOnHand - planRow.maxStock;
       add({
         type: "OVERSTOCK",
         category: "Stock levels",
-        item: m.name,
         title: `${m.name}: ${excess.toFixed(1)} ${m.unit} above maximum stock`,
-        detail: `On hand ${planRow.centralOnHand} vs maximum ${planRow.maxStock}${m.daysOfCover ? ` (${m.daysOfCover} days of cover)` : ""}.`,
-        action: perishable
-          ? "Pause orders, use it first (FIFO) and suggest it to the kitchen as a special to avoid spoilage."
-          : "Pause orders until stock falls to the reorder point.",
+        detail: `On hand ${planRow.centralOnHand} vs maximum ${planRow.maxStock}.`,
+        action: "Pause orders until stock falls to the reorder point, and review the order quantity used.",
         impact: round2(excess * planRow.costPrice),
         impactLabel: "cash tied up above maximum",
       });
     }
-    // Stock-out risk with nothing on order.
-    if (planRow && ["OUT_OF_STOCK", "BELOW_SAFETY_STOCK"].includes(planRow.status) && planRow.onOrder === 0 && usagePerDay > 0) {
-      add({
-        type: "STOCKOUT_RISK",
-        category: "Stock levels",
-        item: m.name,
-        title: `${m.name}: ${planRow.status === "OUT_OF_STOCK" ? "out of stock" : "below safety stock"} with nothing on order`,
-        detail: `On hand ${planRow.centralOnHand} ${m.unit}, using about ${usagePerDay} per day; lead time ${planRow.leadTimeDays} days.`,
-        action: `Raise a purchase order now for about ${planRow.suggestedOrderQty || Math.ceil(usagePerDay * (planRow.leadTimeDays + 7))} ${m.unit}.`,
-        severity: "high",
-      });
-    }
-    // Waste hotspots.
-    if (m.issuedValue > 0) {
-      const { wasteValue } = m;
-      if (wasteValue / m.issuedValue >= 0.03) {
-        add({
-          type: "WASTE",
-          category: "Waste",
-          item: m.name,
-          title: `${m.name}: waste is ${((wasteValue / m.issuedValue) * 100).toFixed(1)}% of issues`,
-          detail: `Written off ${fmt(wasteValue)} vs ${fmt(m.issuedValue)} issued in the period.`,
-          action: perishable
-            ? "Order smaller quantities more often, enforce FIFO and check storage temperature."
-            : "Check storage and handling; review whether order sizes are too large.",
-          impact: money30(wasteValue / days),
-          impactLabel: "waste cost per 30 days",
-        });
-      }
-    }
   }
 
-  // Non-moving stock as one consolidated insight.
+  // Contracts for the biggest spend items.
+  const allSpend = spendItems.reduce((s, r) => s + r.value, 0);
+  const top10 = spendItems.slice(0, 10);
+  const top10Spend = top10.reduce((s, r) => s + r.value, 0);
+  if (top10.length >= 3 && allSpend > 0) {
+    add({
+      type: "CONTRACT_TOP_SPEND",
+      category: "Purchasing",
+      title: `10 items make up ${((top10Spend / allSpend) * 100).toFixed(0)}% of purchase spend`,
+      detail: `${top10.slice(0, 5).map((r) => r.name).join(", ")}…`,
+      action: "Negotiate monthly fixed-price or volume contracts for these items, and get competing quotes from a second supplier.",
+      impact: money30((top10Spend / days) * 0.02),
+      impactLabel: "saving per month from a 2% discount",
+    });
+  }
+  // Items whose spend jumped vs the previous period.
+  for (const r of spendItems.slice(0, 30)) {
+    if (r.changePct === null || r.changePct < 25 || r.value - r.previous < allSpend * 0.005) continue;
+    add({
+      type: "SPEND_GROWTH",
+      category: "Purchasing",
+      title: `${r.name}: spend up ${r.changePct.toFixed(0)}% on the previous period`,
+      detail: `${fmt(r.value)} vs ${fmt(r.previous)}; average price now ${fmt(r.avgPrice)} per ${r.unit}.`,
+      action: "Check whether the rise is price or volume: renegotiate if price, review par levels and portions if volume.",
+      impact: money30((r.value - r.previous) / days),
+      impactLabel: "extra spend per month",
+    });
+  }
+  // Departments whose consumption grew.
+  const totalIssues = departmentComparison.reduce((s, d) => s + d.current, 0);
+  for (const d of departmentComparison) {
+    if (d.changePct === null || d.changePct < 15 || d.current < totalIssues * 0.02) continue;
+    add({
+      type: "DEPT_COST_GROWTH",
+      category: "Departments",
+      title: `${d.name}: consumption up ${d.changePct.toFixed(0)}% on the previous period`,
+      detail: `${fmt(d.current)} vs ${fmt(d.previous)}; ${d.sharePct}% of all issues.`,
+      action: "Review with the department head against occupancy and covers; check par levels, portion sizes and staff meals.",
+      impact: money30((d.current - d.previous) / days),
+      impactLabel: "extra cost per month",
+    });
+  }
+  // Non-moving stock.
   const nonMoving = movement.filter((m) => m.fsn === "N" && m.closingValue > 0);
   if (nonMoving.length) {
     const value = round2(nonMoving.reduce((s, m) => s + m.closingValue, 0));
@@ -184,7 +357,6 @@ const buildInsights = async ({ movement, plan, scorecards, cogs, days }) => {
       impactLabel: "cash tied up",
     });
   }
-
   // Unreliable suppliers.
   for (const card of scorecards.values()) {
     if (card.purchaseOrdersDelivered >= 3 && card.onTimeDeliveryRate !== null && card.onTimeDeliveryRate < 0.8) {
@@ -193,24 +365,38 @@ const buildInsights = async ({ movement, plan, scorecards, cogs, days }) => {
         category: "Suppliers",
         title: `${card.vendor.vendorName}: only ${(card.onTimeDeliveryRate * 100).toFixed(0)}% of deliveries on time`,
         detail: `Average lead time ${card.avgActualLeadTimeDays?.toFixed(1)} days vs ${card.promisedLeadTimeDays} promised.`,
-        action: "Raise it at the next supplier review, keep a second supplier for critical items, and order earlier (safety stock already allows for the actual lead time).",
+        action: "Raise it at the monthly supplier review, agree delivery windows, and keep a second supplier for critical items.",
       });
     }
   }
-
-  // Severity: stock-outs are always high; money items scale with monthly cost of goods.
-  const monthlyCogs = Math.max(1, (cogs.cogs / days) * 30);
-  for (const i of insights) {
-    if (i.severity) continue;
-    if (i.impact === null) i.severity = "medium";
-    else if (i.impact >= monthlyCogs * 0.01) i.severity = "high";
-    else if (i.impact >= monthlyCogs * 0.002) i.severity = "medium";
-    else i.severity = "low";
-  }
-  const rank = { high: 0, medium: 1, low: 2 };
-  return insights
-    .sort((a, b) => rank[a.severity] - rank[b.severity] || (b.impact ?? 0) - (a.impact ?? 0))
-    .slice(0, 20);
+  return out;
 };
 
-module.exports = { buildInsights, marketTrends };
+/**
+ * Up to PER_HORIZON suggestions per horizon, ranked by severity then money impact.
+ * Severity scales with monthly cost of goods so it means the same in any size of hotel.
+ */
+const buildInsights = async ({ movement, plan, scorecards, cogs, days, spendItems = [], departmentComparison = [], toDate = new Date() }) => {
+  const now = Math.min(Date.now(), toDate.getTime());
+  const prices = await priceWindows(now);
+  const [daily, monthly] = await Promise.all([
+    dailySuggestions({ movement, plan, departmentComparison, prices, now }),
+    monthlySuggestions({ movement, plan, scorecards, days, spendItems, departmentComparison, prices }),
+  ]);
+  const monthlyCogs = Math.max(1, (cogs.cogs / days) * 30);
+  const rank = { high: 0, medium: 1, low: 2 };
+  const finish = (list, base) =>
+    list
+      .map((s) => {
+        if (s.severity) return s;
+        if (s.impact === null) return { ...s, severity: "medium" };
+        const share = s.impact / base;
+        return { ...s, severity: share >= 0.01 ? "high" : share >= 0.002 ? "medium" : "low" };
+      })
+      .sort((a, b) => rank[a.severity] - rank[b.severity] || (b.impact ?? 0) - (a.impact ?? 0))
+      .slice(0, PER_HORIZON);
+  // Daily amounts cover a few days, so they are judged against a few days of cost of goods.
+  return [...finish(daily, monthlyCogs / 10), ...finish(monthly, monthlyCogs)];
+};
+
+module.exports = { buildInsights, priceWindows };

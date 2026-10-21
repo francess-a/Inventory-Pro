@@ -1,4 +1,4 @@
-// Seeds a demo hotel: vendors, departments, items and ~120 days of simulated
+// Seeds a demo hotel: vendors, departments, items and ~200 days of simulated
 // purchasing, requisitions/issues and market prices, so that usage statistics,
 // safety stock, vendor scorecards and price trends have history to work from.
 //
@@ -10,12 +10,12 @@
 
 const bcrypt = require("bcryptjs");
 const prisma = require("../src/db");
-const { createInTx, sendInTx, receiveInTx } = require("../src/services/purchasing");
+const { createInTx, sendInTx, receiveInTx, closeInTx } = require("../src/services/purchasing");
 const { issueInTx } = require("../src/services/requisitions");
 const { issueFromCentral } = require("../src/services/ledger");
 const { DAY_MS } = require("../src/lib/planning");
 
-const HISTORY_DAYS = 120;
+const HISTORY_DAYS = 200;
 
 // Deterministic PRNG (mulberry32) so every seed produces the same demo data.
 let state = 20261021;
@@ -183,7 +183,7 @@ const main = async () => {
       async (tx) => {
         // 1. Deliveries due today (receipts posted at 07:00; today's are left open).
         for (const delivery of pendingDeliveries.filter((d) => d.day === day && !isToday)) {
-          await receiveInTx(tx, delivery.po.id, {
+          const received = await receiveInTx(tx, delivery.po.id, {
             receivedAt: at(day, 7),
             invoiceNumber: `INV-${Math.floor(rand() * 900000 + 100000)}`,
             lines: delivery.po.items.map((line) => {
@@ -198,6 +198,10 @@ const main = async () => {
               };
             }),
           });
+          // The store keeper closes short deliveries; the last few days' are still open.
+          if (received.status === "PARTIALLY_RECEIVED" && day < HISTORY_DAYS - 4) {
+            await closeInTx(tx, delivery.po.id, "balance not supplied");
+          }
           for (const line of delivery.po.items) {
             openOrderFor.delete(line.itemId);
             const item = items.find((i) => i.id === line.itemId);

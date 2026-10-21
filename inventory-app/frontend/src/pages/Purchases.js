@@ -190,7 +190,7 @@ export default function Purchases() {
   const act = async (po, action) => {
     try {
       await api.post(`/purchase-orders/${po.id}/${action}`);
-      setMessage(`${po.poNumber}: ${action === "send" ? "sent to supplier" : "cancelled"}.`);
+      setMessage(`${po.poNumber}: ${{ send: "sent to supplier", cancel: "cancelled", close: "closed short" }[action]}.`);
       load();
     } catch (err) {
       setError(errorMessage(err));
@@ -271,6 +271,16 @@ export default function Purchases() {
                     {canApprove && po.status === "DRAFT" && <button type="button" className="link" onClick={() => act(po, "send")}>Send</button>}
                     {["SENT", "PARTIALLY_RECEIVED"].includes(po.status) && (
                       <button type="button" className="link" onClick={() => setReceiving(po)}>Receive</button>
+                    )}
+                    {canApprove && po.status === "PARTIALLY_RECEIVED" && (
+                      <button
+                        type="button"
+                        className="link"
+                        title="The rest will not be delivered: stop counting it as on order"
+                        onClick={() => window.confirm(`Close ${po.poNumber} short? The undelivered balance will no longer count as on order.`) && act(po, "close")}
+                      >
+                        Close short
+                      </button>
                     )}
                     {canApprove && ["DRAFT", "SENT"].includes(po.status) && (
                       <button type="button" className="link" onClick={() => act(po, "cancel")}>Cancel</button>
