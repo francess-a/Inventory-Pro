@@ -20,9 +20,12 @@ This repository contains a **production‑ready inventory management system** wi
 
 `inventory-app` is one application: a Node.js server (`inventory-app/server`) that serves
 both the REST API and the React web app (`inventory-app/frontend`), backed by PostgreSQL.
-It handles login and user roles, purchases from multiple suppliers, department
-requisitions and issues with values, automatic safety stock, reorder points, maximum stock
-and order quantities, vendor scorecards, and market price trends.
+It handles login and user roles, purchases from multiple suppliers with batch, expiry and
+invoice tracking, department requisitions and issues with values, demand forecasting,
+automatic safety stock, reorder points, maximum stock and order quantities, vendor
+scorecards, market price trends, daily stock valuation (WAC and FIFO), cost of goods per
+outlet, and an append-only, hash-chained audit trail. The architecture blueprint is in
+[`inventory-app/docs/central-store-blueprint.md`](inventory-app/docs/central-store-blueprint.md).
 
 ```bash
 docker compose up --build          # PostgreSQL + the app on http://localhost:5100

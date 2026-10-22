@@ -19,7 +19,8 @@ const weekKey = (d) => {
 };
 
 const departmentName = (dept) =>
-  dept.subDepartment === "NONE" ? dept.mainOutlet.replace(/_/g, " ") : `${dept.mainOutlet} / ${dept.subDepartment.replace(/_/g, " ")}`;
+  dept.name ??
+  (dept.subDepartment === "NONE" ? dept.mainOutlet.replace(/_/g, " ") : `${dept.mainOutlet} / ${dept.subDepartment.replace(/_/g, " ")}`);
 
 // Keeps the largest `keep` entries and folds the remainder into "Other".
 const topWithOther = (entries, keep) => {
@@ -46,10 +47,11 @@ const sumBy = (rows, keyFn, valueFn) => {
  */
 const replayStock = async (from, to, rangeTxns, itemIds) => {
   const opening = await prisma.$queryRaw`
-    SELECT DISTINCT ON ("itemId") "itemId", "closingStockCentral", "closingStockCentralValue"
-    FROM "InventoryTransaction"
+    SELECT DISTINCT ON (item_id) item_id AS "itemId", closing_stock_central AS "closingStockCentral",
+           closing_stock_central_value AS "closingStockCentralValue"
+    FROM stock_transaction_ledger
     WHERE "timestamp" < ${from}
-    ORDER BY "itemId", "timestamp" DESC`;
+    ORDER BY item_id, "timestamp" DESC, seq DESC`;
   const state = new Map(itemIds.map((id) => [id, { qty: 0, value: 0 }]));
   for (const r of opening) state.set(r.itemId, { qty: Number(r.closingStockCentral), value: Number(r.closingStockCentralValue) });
   const perItem = new Map(
@@ -104,7 +106,7 @@ const analytics = async ({ from, to } = {}) => {
         timestamp: true,
         item: { select: { itemName: true, category: true, unitOfMeasure: true } },
       },
-      orderBy: { timestamp: "asc" },
+      orderBy: [{ timestamp: "asc" }, { seq: "asc" }],
     }),
     prisma.outletDepartment.findMany(),
     prisma.vendor.findMany({ select: { id: true, vendorName: true } }),

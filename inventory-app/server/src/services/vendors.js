@@ -1,6 +1,6 @@
 const prisma = require("../db");
 const { notFound, uuid, int, text } = require("../lib/http");
-const { computeScorecard } = require("../lib/scorecard");
+const { computeScorecard, WEIGHTS } = require("../lib/scorecard");
 const { DAY_MS } = require("../lib/planning");
 const { benchmarkPrices } = require("./market");
 
@@ -14,6 +14,9 @@ const parseVendor = (body, { partial = false } = {}) => {
     email: text(body.email, "email", opt),
     phone: text(body.phone, "phone", opt),
     leadTimeDays: int(body.leadTimeDays, "leadTimeDays", opt),
+    address: text(body.address, "address", { optional: true }),
+    taxId: text(body.taxId, "taxId", { optional: true }),
+    paymentTermsDays: int(body.paymentTermsDays, "paymentTermsDays", { optional: true }),
     ...(typeof body.isActive === "boolean" && { isActive: body.isActive }),
   };
   return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
@@ -82,4 +85,42 @@ const getScorecard = async (id) => {
   return { ...card, recentOrders };
 };
 
-module.exports = { listVendors, createVendor, updateVendor, scorecardsByVendor, listScorecards, getScorecard };
+/**
+ * Writes each vendor's current scorecard into vendor_master.rating_matrix / overall_rating:
+ *   { onTime, fillRate, quality, price } component scores 0-100, the weights used, the raw
+ *   metrics and when it was computed. Vendors without deliveries in the window keep a null rating.
+ */
+const refreshRatings = async () => {
+  const cards = [...(await scorecardsByVendor()).values()];
+  const now = new Date();
+  const round1 = (v) => (v === null || v === undefined ? null : Math.round(v * 10) / 10);
+  await prisma.$transaction(
+    cards.map((c) =>
+      prisma.vendor.update({
+        where: { id: c.vendor.id },
+        data: {
+          ratingMatrix: {
+            scores: Object.fromEntries(Object.entries(c.componentScores).map(([k, v]) => [k, round1(v)])),
+            weights: WEIGHTS,
+            metrics: {
+              purchaseOrdersDelivered: c.purchaseOrdersDelivered,
+              avgActualLeadTimeDays: round1(c.avgActualLeadTimeDays),
+              onTimeDeliveryRate: c.onTimeDeliveryRate,
+              fillRate: c.fillRate,
+              qualityAcceptanceRate: c.qualityAcceptanceRate,
+              priceIndex: c.priceIndex,
+            },
+            grade: c.grade,
+            windowDays: SCORECARD_WINDOW_DAYS,
+            computedAt: now.toISOString(),
+          },
+          overallRating: c.overallScore,
+          ratedAt: now,
+        },
+      })
+    )
+  );
+  return { vendorsRated: cards.filter((c) => c.overallScore !== null).length, vendors: cards.length };
+};
+
+module.exports = { listVendors, createVendor, updateVendor, scorecardsByVendor, listScorecards, getScorecard, refreshRatings };

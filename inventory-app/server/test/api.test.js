@@ -14,7 +14,8 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
   url.searchParams.set("schema", schema);
   process.env.DATABASE_URL = url.toString();
   process.env.AUTH_DISABLED = "true";
-  execSync("npx prisma db push --skip-generate", {
+  // Real migrations (not db push) so the triggers and CHECK constraints are in place.
+  execSync("npx prisma migrate deploy", {
     cwd: path.join(__dirname, ".."),
     env: { ...process.env, DATABASE_URL: url.toString() },
     stdio: "ignore",
@@ -274,21 +275,25 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
 
   // ── Replenishment ────────────────────────────────────────────
   await t.test("replenishment plan, recalculation and PO generation", async () => {
-    // Back-date heavy onion usage so the plan computes levels above current stock.
+    // Back-date heavy onion usage so the plan computes levels above current stock. The ledger is
+    // hash-chained, so the synthetic history goes through the same append as real movements.
+    const { appendEntry } = require("../src/services/ledger");
     const now = Date.now();
-    await prisma.inventoryTransaction.createMany({
-      data: Array.from({ length: 30 }, (_, i) => ({
-        itemId: onion.id,
-        type: "OUTLET_ISSUE",
-        sourceLocation: "CENTRAL",
-        destinationLocation: kitchen.id,
-        quantity: 10 + (i % 3),
-        unitCost: 44,
-        transactionValue: 44 * (10 + (i % 3)),
-        closingStockCentral: 58,
-        closingStockCentralValue: 2552,
-        timestamp: new Date(now - (i + 1) * 24 * 60 * 60 * 1000),
-      })),
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < 30; i += 1) {
+        await appendEntry(tx, {
+          itemId: onion.id,
+          type: "OUTLET_ISSUE",
+          sourceLocation: "CENTRAL",
+          destinationLocation: kitchen.id,
+          quantity: 10 + (i % 3),
+          unitCost: 44,
+          transactionValue: 44 * (10 + (i % 3)),
+          closingStockCentral: 58,
+          closingStockCentralValue: 2552,
+          timestamp: new Date(now - (i + 1) * 24 * 60 * 60 * 1000),
+        });
+      }
     });
 
     const plan = await ok("GET", "/replenishment");
@@ -421,6 +426,264 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
     assert.ok(dash.centralStockValue > 0);
   });
 
+  // ── Central store architecture ───────────────────────────────
+  const today = new Date().toISOString().slice(0, 10);
+  const daysFromNow = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  let chicken;
+  let saffron;
+
+  await t.test("multi-tier categories", async () => {
+    const tree = await ok("GET", "/categories");
+    const chickenNode = tree.find((c) => c.code === "CHICKEN");
+    assert.equal(chickenNode.path, "Food › Meat & poultry › Chicken");
+    assert.equal(chickenNode.level, 3);
+    assert.ok(tree.find((c) => c.code === "DRY_GOODS").parentCode === "GROCERY");
+    const cheese = await ok("POST", "/categories", { code: "cheese", name: "Cheese", parentCode: "DAIRY" });
+    assert.equal(cheese.level, 3);
+    assert.equal(cheese.isPerishable, true, "inherits perishable from its parent");
+    assert.equal((await call("POST", "/categories", { code: "BRIE", name: "Brie", parentCode: "CHEESE" })).status, 400, "max three levels");
+    assert.equal((await call("POST", "/items", { sku: "G1", barcode: "g1", itemName: "Group item", category: "FOOD", unitOfMeasure: "kg" })).status, 400);
+    const food = await ok("GET", "/items?category=FOOD");
+    assert.deepEqual(food.map((i) => i.sku).sort(), ["BUT", "ONI", "RIC"]);
+  });
+
+  await t.test("goods receipt records batch, expiry and invoice on the inward ledger", async () => {
+    chicken = await ok("POST", "/items", { sku: "CHK", barcode: "444", itemName: "Chicken", category: "CHICKEN", unitOfMeasure: "kg" });
+    saffron = await ok("POST", "/items", { sku: "SAF", barcode: "555", itemName: "Saffron", category: "GROCERY", unitOfMeasure: "g", shelfLifeDays: 400 });
+    const po1 = await ok("POST", "/purchase-orders", { vendorId: farm.id, items: [{ itemId: chicken.id, quantityOrdered: 30, unitPrice: 200 }] });
+    await ok("POST", `/purchase-orders/${po1.id}/send`);
+    const line = po1.items[0];
+    // Already expired goods cannot be accepted.
+    const expired = await call("POST", `/purchase-orders/${po1.id}/receive`, {
+      lines: [{ poItemId: line.id, quantityReceived: 10, expiryDate: daysFromNow(-1) }],
+    });
+    assert.equal(expired.status, 400);
+    await ok("POST", `/purchase-orders/${po1.id}/receive`, {
+      invoiceNumber: "FARM-881",
+      invoiceDate: today,
+      lines: [
+        { poItemId: line.id, quantityReceived: 10, quantityRejected: 2, rejectionReason: "Smell", batchNumber: "LATE-EXP", expiryDate: daysFromNow(3) },
+      ],
+    });
+    // Second delivery without an expiry date: defaulted from the category shelf life (3 days).
+    await ok("POST", `/purchase-orders/${po1.id}/receive`, { lines: [{ poItemId: line.id, quantityReceived: 10, batchNumber: "EARLY-EXP", expiryDate: daysFromNow(1) }] });
+    await ok("POST", `/purchase-orders/${po1.id}/receive`, { lines: [{ poItemId: line.id, quantityReceived: 8 }] });
+
+    const inward = await ok("GET", `/ledger/inward?purchaseOrderId=${po1.id}`);
+    assert.equal(inward.length, 3);
+    const first = inward.find((r) => r.batchNumber === "LATE-EXP");
+    assert.equal(first.invoiceNumber, "FARM-881");
+    assert.equal(first.invoiceDate.slice(0, 10), today);
+    assert.equal(Number(first.quantityReceived), 10);
+    assert.equal(Number(first.quantityRejected), 2);
+    assert.equal(first.lineValue, "2000");
+    assert.equal(first.receivedBy, "system");
+    assert.ok(first.transactionId);
+    const defaulted = inward.find((r) => !["LATE-EXP", "EARLY-EXP"].includes(r.batchNumber));
+    assert.match(defaulted.batchNumber, /^GRN-/);
+    assert.equal(defaulted.expiryDate.slice(0, 10), daysFromNow(3));
+
+    const batches = await ok("GET", `/ledger/batches?itemId=${chicken.id}`);
+    assert.deepEqual(batches.map((b) => b.batchNumber), ["EARLY-EXP", "LATE-EXP", defaulted.batchNumber]);
+    assert.equal((await ok("GET", `/ledger/batches?expiringWithinDays=1`)).length, 1);
+  });
+
+  await t.test("issues consume batches first-expiry-first-out and write the issue ledger", async () => {
+    let req = await ok("POST", "/requisitions", { outletDepartmentId: kitchen.id, items: [{ itemId: chicken.id, quantityRequested: 12 }] });
+    req = await ok("POST", `/requisitions/${req.id}/approve`);
+    req = await ok("POST", `/requisitions/${req.id}/issue`, {});
+    const issues = await ok("GET", `/ledger/issues?requisitionId=${req.id}`);
+    assert.equal(issues.length, 1);
+    assert.match(issues[0].issueNumber, /^ISS-/);
+    assert.equal(issues[0].issueValue, "2400");
+    assert.deepEqual(
+      issues[0].batchAllocations.map((a) => [a.batchNumber, a.quantity]),
+      [["EARLY-EXP", 10], ["LATE-EXP", 2]]
+    );
+    const batches = await ok("GET", `/ledger/batches?itemId=${chicken.id}`);
+    assert.equal(batches.reduce((sum, b) => sum + Number(b.quantityRemaining), 0), 16);
+    assert.equal(Number((await central(chicken.id)).quantityOnHand), 16);
+  });
+
+  await t.test("simultaneous issue requests deduct stock exactly once", async () => {
+    let req = await ok("POST", "/requisitions", {
+      outletDepartmentId: kitchen.id,
+      items: [{ itemId: chicken.id, quantityRequested: 3 }, { itemId: rice.id, quantityRequested: 1 }],
+    });
+    req = await ok("POST", `/requisitions/${req.id}/approve`);
+    const before = { chicken: Number((await central(chicken.id)).quantityOnHand), rice: Number((await central(rice.id)).quantityOnHand) };
+    const results = await Promise.all(Array.from({ length: 6 }, () => call("POST", `/requisitions/${req.id}/issue`, {})));
+    assert.deepEqual(results.map((r) => r.status).sort(), [200, 409, 409, 409, 409, 409]);
+    assert.equal(Number((await central(chicken.id)).quantityOnHand), before.chicken - 3);
+    assert.equal(Number((await central(rice.id)).quantityOnHand), before.rice - 1);
+    assert.equal((await ok("GET", `/ledger/issues?requisitionId=${req.id}`)).length, 2);
+  });
+
+  await t.test("an idempotency key makes a retried issue return the original result", async () => {
+    let req = await ok("POST", "/requisitions", { outletDepartmentId: kitchen.id, items: [{ itemId: chicken.id, quantityRequested: 2 }] });
+    req = await ok("POST", `/requisitions/${req.id}/approve`);
+    const before = Number((await central(chicken.id)).quantityOnHand);
+    const send = (key) =>
+      fetch(`${base}/requisitions/${req.id}/issue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+        body: "{}",
+      }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const first = await send("issue-abc");
+    const retry = await send("issue-abc");
+    assert.equal(first.status, 200);
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.replayed, true);
+    assert.equal(retry.body.id, first.body.id);
+    assert.equal((await send("another-key")).status, 409);
+    assert.equal(Number((await central(chicken.id)).quantityOnHand), before - 2);
+  });
+
+  await t.test("the ledgers are append-only", async () => {
+    const updates = {
+      stock_transaction_ledger: "remarks = 'x'",
+      purchase_inward_ledger: "received_by = 'x'",
+      issue_requisition_ledger: "issued_by = 'x'",
+      audit_log: "path = 'x'",
+    };
+    for (const [table, set] of Object.entries(updates)) {
+      await assert.rejects(prisma.$executeRawUnsafe(`UPDATE ${table} SET ${set}`), /append-only/, table);
+      await assert.rejects(prisma.$executeRawUnsafe(`DELETE FROM ${table}`), /append-only/, table);
+      await assert.rejects(prisma.$executeRawUnsafe(`TRUNCATE ${table} CASCADE`), /append-only/, table);
+    }
+    // Stock can never go negative, even bypassing the application.
+    await assert.rejects(prisma.$executeRawUnsafe(`UPDATE central_stock SET quantity_on_hand = -1 WHERE item_id = '${chicken.id}'`), /central_stock_quantity_check/);
+  });
+
+  await t.test("hash chain verification detects tampering", async () => {
+    const report = await ok("GET", "/ledger/verify");
+    assert.equal(report.valid, true, JSON.stringify(report.problems));
+    assert.equal(report.entries, await prisma.inventoryTransaction.count());
+    assert.ok(report.heads.every((h) => /^[0-9a-f]{64}$/.test(h.entryHash)));
+
+    // A database administrator edits a historical row with the trigger switched off…
+    const row = (await ok("GET", `/ledger/transactions?itemId=${chicken.id}&limit=500`)).rows.at(-1);
+    const edit = (sql) =>
+      prisma.$transaction([
+        prisma.$executeRawUnsafe("ALTER TABLE stock_transaction_ledger DISABLE TRIGGER stock_transaction_ledger_append_only"),
+        prisma.$executeRawUnsafe(sql),
+        prisma.$executeRawUnsafe("ALTER TABLE stock_transaction_ledger ENABLE TRIGGER stock_transaction_ledger_append_only"),
+      ]);
+    await edit(`UPDATE stock_transaction_ledger SET quantity = quantity + 1 WHERE id = '${row.id}'`);
+    const tampered = await ok("GET", `/ledger/verify?itemId=${chicken.id}`);
+    assert.equal(tampered.valid, false);
+    assert.deepEqual(tampered.problems.map((p) => [p.problem, p.seq]), [["TAMPERED", row.seq]]);
+    await edit(`UPDATE stock_transaction_ledger SET quantity = quantity - 1 WHERE id = '${row.id}'`);
+    assert.equal((await ok("GET", `/ledger/verify?itemId=${chicken.id}`)).valid, true);
+  });
+
+  await t.test("daily closing valuation: WAC book value and FIFO comparison", async () => {
+    const po = await ok("POST", "/purchase-orders/direct", { vendorId: metro.id, items: [{ itemId: saffron.id, quantityOrdered: 10, unitPrice: 100 }] });
+    assert.equal(po.status, "RECEIVED");
+    await ok("POST", "/purchase-orders/direct", { vendorId: metro.id, items: [{ itemId: saffron.id, quantityOrdered: 10, unitPrice: 200 }] });
+    let req = await ok("POST", "/requisitions", { outletDepartmentId: kitchen.id, items: [{ itemId: saffron.id, quantityRequested: 5 }] });
+    req = await ok("POST", `/requisitions/${req.id}/approve`);
+    await ok("POST", `/requisitions/${req.id}/issue`, {});
+
+    const created = await ok("POST", "/valuation/snapshots", { from: today, to: today });
+    assert.ok(created.rows >= 5);
+    const day = await ok("GET", `/valuation/items?date=${today}`);
+    const s = day.rows.find((r) => r.itemId === saffron.id);
+    assert.equal(s.receivedQty, 20);
+    assert.equal(s.issuedQty, 5);
+    assert.equal(s.closingQty, 15);
+    assert.equal(s.wacUnitCost, 150);
+    assert.equal(s.closingValueWac, 2250);
+    assert.equal(s.closingValueFifo, 2500, "10 @ 200 + 5 @ 100");
+    assert.equal(s.avgDailyIssueValue, 25, "750 issued ÷ 30 days");
+    assert.equal(s.daysOnHand, 90);
+    // Every item's snapshot agrees with central stock.
+    for (const r of day.rows) {
+      const c = await central(r.itemId);
+      assert.equal(r.closingQty, Number(c.quantityOnHand), r.sku);
+      assert.equal(r.closingValueWac, Number(c.totalValue), r.sku);
+    }
+    // Regenerating is idempotent.
+    assert.equal((await ok("POST", "/valuation/snapshots", { from: today, to: today })).rows, created.rows);
+    const totals = await ok("GET", `/valuation/daily?from=${today}&to=${today}`);
+    assert.equal(totals.days.length, 1);
+    assert.equal(totals.days[0].closingValueWac, Math.round(day.rows.reduce((t, r) => t + r.closingValueWac, 0) * 100) / 100);
+    assert.equal((await call("POST", "/valuation/snapshots", { from: daysFromNow(1), to: daysFromNow(1) })).status, 400);
+  });
+
+  await t.test("cost of goods per outlet with revenue percentages", async () => {
+    const bar = await ok("POST", "/departments", { mainOutlet: "BAR" });
+    assert.equal(bar.code, "BAR");
+    assert.equal(bar.outletType, "BAR");
+    assert.equal(kitchen.code, "FB-TANDOOR");
+    assert.equal(kitchen.outletType, "KITCHEN");
+
+    const issues = await ok("GET", `/transactions?type=OUTLET_ISSUE&limit=500`);
+    const kitchenCogs = issues.filter((t) => t.destinationLocation === kitchen.id).reduce((sum, t) => sum + Number(t.transactionValue), 0);
+    await ok("PUT", `/departments/${kitchen.id}/revenue`, { businessDate: today, revenue: 50000 });
+    await ok("PUT", `/departments/${kitchen.id}/revenue`, { businessDate: today, revenue: 40000 }); // corrected, not added
+    const report = await ok("GET", `/reports/outlet-cogs?from=${daysFromNow(-60)}&to=${today}`);
+    const row = report.outlets.find((o) => o.outletId === kitchen.id);
+    assert.equal(row.cogs, Math.round(kitchenCogs * 100) / 100);
+    assert.equal(row.revenue, 40000);
+    assert.equal(row.costPct, Math.round((kitchenCogs / 40000) * 1000) / 10);
+    assert.equal(row.sharePct, 100);
+    assert.equal(report.byGroup.find((g) => g.code === "FOOD").cogs, row.cogs);
+    assert.equal((await ok("GET", `/revenue?from=${today}&to=${today}`))[0].revenue, 40000);
+  });
+
+  await t.test("inventory health: days on hand, turnover and ageing", async () => {
+    const health = await ok("GET", "/reports/inventory-health");
+    const s = health.items.find((r) => r.itemId === saffron.id);
+    assert.equal(s.onHand, 15);
+    assert.equal(s.stockValueWac, 2250);
+    assert.equal(s.stockValueLayers, 2500, "remaining batches at their own cost");
+    assert.equal(s.avgDailyConsumptionValue, 25);
+    assert.equal(s.daysOnHand, 90);
+    assert.equal(s.status, "SLOW");
+    assert.ok(s.avgAgeDays < 1);
+    assert.ok(health.summary.stockValue > 0);
+    assert.ok(health.summary.slowMovingValue >= 2250);
+    // 11 kg of chicken expires within 3 days but the kitchen uses ~0.6 kg a day: most of it is at risk.
+    const c = health.items.find((r) => r.itemId === chicken.id);
+    assert.equal(c.status, "AT_RISK");
+    assert.equal(c.expiringQty, 11);
+    const dailyQty = 17 / 30; // 12 + 3 + 2 kg issued today
+    assert.ok(Math.abs(c.atRiskQty - (11 - dailyQty * 3)) < 0.01, `${c.atRiskQty}`);
+  });
+
+  await t.test("ABC-XYZ matrix and demand forecast", async () => {
+    const matrix = await ok("GET", "/reports/abc-xyz");
+    assert.equal(matrix.cells.length, 9);
+    assert.equal(matrix.cells.reduce((n, c) => n + c.items, 0), matrix.items.length);
+    assert.ok(matrix.cells.every((c) => c.policy));
+    const forecast = await ok("GET", `/reports/forecast?itemId=${chicken.id}`);
+    assert.equal(forecast.length, 1);
+    assert.equal(forecast[0].forecastMethod, "SMA");
+    assert.equal(forecast[0].shelfLifeDays, 3);
+    assert.ok(forecast[0].reorderPoint >= forecast[0].safetyStock);
+  });
+
+  await t.test("vendor rating matrix is refreshed from the scorecard", async () => {
+    const result = await ok("POST", "/vendors/ratings/refresh");
+    assert.ok(result.vendorsRated >= 1);
+    const vendor = (await ok("GET", "/vendors")).find((v) => v.id === farm.id);
+    assert.ok(vendor.ratingMatrix.scores.quality < 100, "rejections lower the quality score");
+    assert.ok(Number(vendor.overallRating) > 0);
+    assert.ok(vendor.ratedAt);
+  });
+
+  await t.test("every change request is in the audit log", async () => {
+    const log = await ok("GET", "/audit/log?limit=500");
+    const issue = log.rows.find((r) => r.path.endsWith("/issue") && r.statusCode === 200);
+    assert.ok(issue);
+    assert.equal(issue.method, "POST");
+    assert.equal(issue.actorName, "system");
+    assert.ok(issue.entityId);
+    assert.ok(log.rows.some((r) => r.statusCode === 409), "refused requests are logged too");
+    assert.ok(log.rows.every((r) => r.method !== "GET"));
+  });
+
   await t.test("register, login and user management", async () => {
     config.authDisabled = false;
     const withToken = (token) => async (method, url, body) => {
@@ -503,7 +766,11 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       for (const path of ["/requisitions", "/departments", "/reports/indent-vs-received"]) {
         assert.equal((await staff("GET", path)).status, 200, path);
       }
-      for (const path of ["/reports/dashboard", "/reports/analytics", "/replenishment", "/purchase-orders", "/vendors", "/market/comparison", "/transactions", "/stock/outlets"]) {
+      for (const path of [
+        "/reports/dashboard", "/reports/analytics", "/replenishment", "/purchase-orders", "/vendors", "/market/comparison",
+        "/transactions", "/stock/outlets", "/reports/outlet-cogs", "/reports/inventory-health", "/valuation/daily",
+        "/ledger/transactions", "/ledger/verify", "/ledger/inward", "/audit/log", "/categories",
+      ]) {
         assert.equal((await staff("GET", path)).status, 403, path);
       }
       for (const [method, path, body] of [
@@ -516,8 +783,10 @@ test("hotel inventory API", { skip: !TEST_DB && "TEST_DATABASE_URL not set" }, a
       ]) {
         assert.equal((await staff(method, path, body)).status, 403, `${method} ${path}`);
       }
-      // Approvers keep their access.
+      // Approvers keep their access; the API audit log is for admins only.
       assert.equal((await approverUser("GET", "/reports/dashboard")).status, 200);
+      assert.equal((await approverUser("GET", "/ledger/verify")).status, 200);
+      assert.equal((await approverUser("GET", "/audit/log")).status, 403);
     } finally {
       config.authDisabled = true;
     }

@@ -22,6 +22,9 @@ export const qty = (value) => Math.round(Number(value) * 1000) / 1000;
 export const date = (value) => (value ? new Date(value).toLocaleDateString() : "–");
 
 export const departmentName = (dept) =>
-  !dept ? "–" : dept.subDepartment === "NONE" ? dept.mainOutlet.replace(/_/g, " ") : `${dept.mainOutlet} / ${dept.subDepartment.replace(/_/g, " ")}`;
+  !dept
+    ? "–"
+    : dept.name ??
+      (dept.subDepartment === "NONE" ? dept.mainOutlet.replace(/_/g, " ") : `${dept.mainOutlet} / ${dept.subDepartment.replace(/_/g, " ")}`);
 
 export const label = (value) => (value ? value.replace(/_/g, " ").toLowerCase() : "");

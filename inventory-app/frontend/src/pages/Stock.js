@@ -3,16 +3,34 @@ import api, { errorMessage } from "../services/api";
 import { money, num, label } from "../utils/format";
 import { useCanApprove } from "../utils/roles";
 
-const CATEGORIES = [
-  "GROCERY", "VEGETABLE", "DAIRY", "PORK", "CHICKEN", "BEEF", "BIRDS", "MUTTON",
-  "SEAFOOD", "LINEN", "AMENITIES", "SPARES", "FRONT_OFFICE", "BAR",
-];
 const STATUS_ORDER = { OUT_OF_STOCK: 0, BELOW_SAFETY_STOCK: 1, REORDER: 2, OK: 3, OVERSTOCK: 4 };
-const EMPTY_ITEM = { sku: "", barcode: "", itemName: "", category: "GROCERY", unitOfMeasure: "kg", orderMultiple: 1, preferredVendorId: "" };
+const EMPTY_ITEM = { sku: "", barcode: "", itemName: "", category: "", unitOfMeasure: "kg", orderMultiple: 1, shelfLifeDays: "", preferredVendorId: "" };
+const ADJUSTMENT_TEXT = {
+  SHELF_LIFE_CAP: "capped at shelf life",
+  FORWARD_BUY: "extra cover: price rising",
+};
+const indent = (c) => "\u00a0\u00a0\u00a0".repeat(c.level - 1) + c.name;
+
+// Codes of a category and every category below it.
+const withDescendants = (categories, code) => {
+  const result = new Set([code]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const c of categories) {
+      if (c.parentCode && result.has(c.parentCode) && !result.has(c.code)) {
+        result.add(c.code);
+        grew = true;
+      }
+    }
+  }
+  return result;
+};
 
 export default function Stock() {
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [onlyReorder, setOnlyReorder] = useState(false);
   const [category, setCategory] = useState("");
   const [selected, setSelected] = useState(new Set());
@@ -24,9 +42,10 @@ export default function Stock() {
 
   const load = useCallback(async () => {
     try {
-      const [plan, vendorList] = await Promise.all([api.get("/replenishment"), api.get("/vendors")]);
+      const [plan, vendorList, categoryList] = await Promise.all([api.get("/replenishment"), api.get("/vendors"), api.get("/categories")]);
       setRows(plan.data);
       setVendors(vendorList.data);
+      setCategories(categoryList.data);
       setError("");
     } catch (err) {
       setError(errorMessage(err, "Unable to load stock"));
@@ -37,13 +56,13 @@ export default function Stock() {
     load();
   }, [load]);
 
-  const visible = useMemo(
-    () =>
-      rows
-        .filter((r) => (!onlyReorder || r.needsReorder) && (!category || r.category === category))
-        .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.itemName.localeCompare(b.itemName)),
-    [rows, onlyReorder, category]
-  );
+  const categoryName = useMemo(() => new Map(categories.map((c) => [c.code, c.name])), [categories]);
+  const visible = useMemo(() => {
+    const codes = category ? withDescendants(categories, category) : null;
+    return rows
+      .filter((r) => (!onlyReorder || r.needsReorder) && (!codes || codes.has(r.category)))
+      .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.itemName.localeCompare(b.itemName));
+  }, [rows, onlyReorder, category, categories]);
 
   const toggle = (id) =>
     setSelected((prev) => {
@@ -78,7 +97,11 @@ export default function Stock() {
   const addItem = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/items", { ...newItem, preferredVendorId: newItem.preferredVendorId || null });
+      await api.post("/items", {
+        ...newItem,
+        preferredVendorId: newItem.preferredVendorId || null,
+        shelfLifeDays: newItem.shelfLifeDays === "" ? undefined : Number(newItem.shelfLifeDays),
+      });
       setNewItem(EMPTY_ITEM);
       setShowAdd(false);
       setMessage("Item added.");
@@ -99,9 +122,11 @@ export default function Stock() {
     <div className="page">
       <h2>Stock &amp; Replenishment</h2>
       <p className="muted">
-        Usage, safety stock, reorder point and maximum stock are calculated from the last 90 days of issues and each
-        vendor's actual delivery lead time. Order quantity = maximum stock − (on hand + on order), rounded up to the pack
-        size, suggested once stock on hand + on order falls to the reorder point.
+        Daily demand is forecast from up to a year of issues (weighted moving average or trend smoothing, whichever
+        predicted recent weeks better, with a month-of-year seasonal factor). Safety stock, reorder point and maximum
+        stock use that forecast and each vendor's actual delivery lead time; the maximum is capped at what can be used
+        within the item's shelf life. Order quantity = maximum − (on hand + on order) in whole packs, suggested once the
+        stock position falls to the reorder point.
       </p>
       {error && <p className="error">{error}</p>}
       {message && <p className="notice">{message}</p>}
@@ -111,10 +136,10 @@ export default function Stock() {
           <input type="checkbox" checked={onlyReorder} onChange={(e) => setOnlyReorder(e.target.checked)} /> Only items to
           reorder ({reorderCount})
         </label>
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category">
           <option value="">All categories</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>{label(c)}</option>
+          {categories.map((c) => (
+            <option key={c.code} value={c.code}>{indent(c)}</option>
           ))}
         </select>
         {canApprove && (
@@ -134,9 +159,15 @@ export default function Stock() {
           <label>Barcode<input required {...field("barcode")} /></label>
           <label>Item name<input required {...field("itemName")} /></label>
           <label>Category
-            <select {...field("category")}>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{label(c)}</option>)}
+            <select required {...field("category")}>
+              <option value="">Select…</option>
+              {categories.map((c) => (
+                <option key={c.code} value={c.code} disabled={c.level === 1}>{indent(c)}</option>
+              ))}
             </select>
+          </label>
+          <label>Shelf life (days)
+            <input type="number" min="1" step="1" placeholder={`category default ${categories.find((c) => c.code === newItem.category)?.defaultShelfLifeDays ?? "–"}`} {...field("shelfLifeDays")} />
           </label>
           <label>Unit<input required placeholder="kg, ltr, pcs, pack" {...field("unitOfMeasure")} /></label>
           <label>Pack size (order multiple)<input type="number" min="0.001" step="any" {...field("orderMultiple")} /></label>
@@ -161,6 +192,7 @@ export default function Stock() {
               <th className="num">Value</th>
               <th className="num">On order</th>
               <th className="num">Avg/day</th>
+              <th className="num" title="Forecast daily demand over lead time + review period">Forecast/day</th>
               <th className="num">Days cover</th>
               <th>Vendor</th>
               <th className="num" title="Lead time in days (actual average where delivery history exists)">Lead time</th>
@@ -182,13 +214,17 @@ export default function Stock() {
                 </td>
                 <td>
                   {r.itemName}
-                  <div className="muted">{r.sku} · {label(r.category)}</div>
+                  <div className="muted">{r.sku} · {categoryName.get(r.category) ?? label(r.category)}</div>
                 </td>
                 <td><span className={`badge ${r.status}`}>{label(r.status)}</span></td>
                 <td className="num">{num(r.centralOnHand, 3)} {r.unitOfMeasure}</td>
                 <td className="num">{money(r.centralValue)}</td>
                 <td className="num">{num(r.onOrder, 3)}</td>
                 <td className="num">{num(r.avgDailyUsage, 2)}</td>
+                <td className="num" title={r.forecastMethod ? `${r.forecastMethod}${r.forecastAccuracyPct !== null ? `, ${r.forecastAccuracyPct}% accurate on recent weeks` : ""}${r.seasonalIndex !== 1 ? `, seasonal ×${r.seasonalIndex}` : ""}` : ""}>
+                  {num(r.forecastDailyDemand, 2)}
+                  {r.forecastMethod && <div className="muted">{r.forecastMethod}</div>}
+                </td>
                 <td className="num">{num(r.daysOfCover)}</td>
                 <td>{r.vendorName || "—"}</td>
                 <td className="num" title={label(r.leadTimeSource)}>{num(r.leadTimeDays)} d</td>
@@ -197,6 +233,7 @@ export default function Stock() {
                 <td className="num">
                   {r.maxStock}
                   {r.planningSource === "MANUAL" && <div className="muted">manual</div>}
+                  {r.planningSource !== "MANUAL" && r.planningAdjustments?.map((a) => <div key={a} className="muted">{ADJUSTMENT_TEXT[a]}</div>)}
                 </td>
                 <td className="num"><strong>{r.suggestedOrderQty || ""}</strong></td>
                 <td className="num">{r.suggestedOrderQty ? money(r.suggestedOrderValue) : ""}</td>

@@ -101,18 +101,27 @@ function ReceiveForm({ po, onDone, onError }) {
       quantityRejected: 0,
       rejectionReason: "",
       unitPrice: Number(l.unitPrice),
+      batchNumber: "",
+      expiryDate: "",
     }))
   );
   const [invoiceNumber, setInvoiceNumber] = useState(po.invoiceNumber || "");
+  const [invoiceDate, setInvoiceDate] = useState("");
   const setLine = (i, patch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 
   const submit = async () => {
     try {
       await api.post(`/purchase-orders/${po.id}/receive`, {
         invoiceNumber: invoiceNumber || undefined,
+        invoiceDate: invoiceDate || undefined,
         lines: lines
           .filter((l) => l.outstanding > 0)
-          .map(({ outstanding, ...l }) => ({ ...l, rejectionReason: l.rejectionReason || undefined })),
+          .map(({ outstanding, ...l }) => ({
+            ...l,
+            rejectionReason: l.rejectionReason || undefined,
+            batchNumber: l.batchNumber || undefined,
+            expiryDate: l.expiryDate || undefined,
+          })),
       });
       onDone();
     } catch (err) {
@@ -132,6 +141,8 @@ function ReceiveForm({ po, onDone, onError }) {
             <th>Rejected</th>
             <th>Rejection reason</th>
             <th>Invoice price</th>
+            <th title="Supplier batch / lot number; generated from the GRN number when blank">Batch no.</th>
+            <th title="Defaults to receipt date + shelf life when blank">Expiry</th>
           </tr>
         </thead>
         <tbody>
@@ -143,12 +154,15 @@ function ReceiveForm({ po, onDone, onError }) {
               <td><input type="number" min="0" step="any" style={{ width: 90 }} value={lines[i].quantityRejected} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { quantityRejected: e.target.value })} /></td>
               <td><input value={lines[i].rejectionReason} disabled={!Number(lines[i].quantityRejected)} onChange={(e) => setLine(i, { rejectionReason: e.target.value })} /></td>
               <td><input type="number" min="0" step="0.01" style={{ width: 100 }} value={lines[i].unitPrice} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { unitPrice: e.target.value })} /></td>
+              <td><input style={{ width: 110 }} value={lines[i].batchNumber} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { batchNumber: e.target.value })} /></td>
+              <td><input type="date" value={lines[i].expiryDate} disabled={!lines[i].outstanding} onChange={(e) => setLine(i, { expiryDate: e.target.value })} aria-label={`Expiry date for ${item.item.itemName}`} /></td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="toolbar">
         <input placeholder="Invoice number" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+        <label>Invoice date <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></label>
         <button type="button" className="primary" onClick={submit}>Post receipt</button>
         <button type="button" onClick={onDone}>Close</button>
       </div>

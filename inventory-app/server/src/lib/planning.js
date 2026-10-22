@@ -48,7 +48,8 @@ const roundUpToMultiple = (quantity, multiple) => {
 /**
  * Computes stock levels for one item.
  *
- *   d   = average daily usage, σd = std-dev of daily usage
+ *   d   = planning daily demand: the forecast daily demand when given (see lib/forecast.js),
+ *         otherwise the average daily usage; σd = std-dev of daily usage
  *   L   = lead time in days,   σL = std-dev of lead time
  *   Safety stock   SS  = Z × √(L·σd² + d²·σL²)
  *   Reorder point  ROP = d·L + SS
@@ -58,19 +59,22 @@ const roundUpToMultiple = (quantity, multiple) => {
  */
 const computeStockLevels = ({
   dailyDemand,
+  forecastDailyDemand,
   leadTimeDays,
   leadTimeStdDev = 0,
   serviceZ = 1.65,
   reviewPeriodDays = 7,
 }) => {
-  const d = mean(dailyDemand);
+  const avgDailyUsage = mean(dailyDemand);
+  const d = forecastDailyDemand ?? avgDailyUsage;
   const sd = stdDev(dailyDemand);
   const L = Math.max(0, leadTimeDays);
   const safetyStock = Math.ceil(serviceZ * Math.sqrt(L * sd ** 2 + d ** 2 * leadTimeStdDev ** 2));
   const reorderPoint = Math.ceil(d * L + safetyStock);
   const maxStock = Math.max(reorderPoint, Math.ceil(safetyStock + d * (L + reviewPeriodDays)));
   return {
-    avgDailyUsage: d,
+    avgDailyUsage,
+    planningDailyDemand: d,
     demandStdDev: sd,
     leadTimeDays: L,
     leadTimeStdDev,
@@ -80,12 +84,24 @@ const computeStockLevels = ({
   };
 };
 
+/**
+ * Order quantity = MAX − (on hand + on order), suggested only at or below the reorder point.
+ * It is rounded to whole packs: up by default, but down instead when rounding up would take
+ * the stock position more than half a pack above MAX (and rounding down still clears the
+ * reorder point), so pack sizes never cause systematic over-purchasing.
+ */
 const suggestOrder = ({ onHand, onOrder, reorderPoint, maxStock, orderMultiple = 1 }) => {
   const position = Math.round((onHand + onOrder) * 1000) / 1000;
   if (position > reorderPoint || maxStock <= position) {
     return { stockPosition: position, needsReorder: false, suggestedOrderQty: 0 };
   }
-  const quantity = roundUpToMultiple(maxStock - position, orderMultiple);
+  const pack = orderMultiple > 0 ? orderMultiple : 1;
+  const need = maxStock - position;
+  let quantity = roundUpToMultiple(need, pack);
+  if (position + quantity > maxStock + pack / 2) {
+    const down = Math.round(Math.floor(need / pack + 1e-9) * pack * 1000) / 1000;
+    if (down > 0 && position + down > reorderPoint) quantity = down;
+  }
   return { stockPosition: position, needsReorder: quantity > 0, suggestedOrderQty: quantity };
 };
 

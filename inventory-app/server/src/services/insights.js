@@ -9,7 +9,7 @@ const config = require("../config");
 const { DAY_MS, mean } = require("../lib/planning");
 const { priceComparison } = require("./market");
 
-const PERISHABLE = new Set(["VEGETABLE", "DAIRY", "PORK", "CHICKEN", "BEEF", "BIRDS", "MUTTON", "SEAFOOD"]);
+const PERISHABLE = new Set(["VEGETABLE", "DAIRY", "MEAT_POULTRY", "PORK", "CHICKEN", "BEEF", "BIRDS", "MUTTON", "SEAFOOD"]);
 const PER_HORIZON = 20;
 const round2 = (n) => Math.round(n * 100) / 100;
 const money30 = (perDay) => round2(perDay * 30);

@@ -1,15 +1,16 @@
 const crypto = require("crypto");
 const prisma = require("../db");
 const { badRequest, conflict, notFound, uuid, quantity: parseQuantity, text, date, nonEmptyArray } = require("../lib/http");
-const { issueFromCentral, D, round2, qty } = require("./ledger");
+const { issueFromCentral, inTransaction, D, round2, qty } = require("./ledger");
 
 const REQ_INCLUDE = {
   department: true,
   items: { include: { item: { select: { id: true, sku: true, itemName: true, unitOfMeasure: true, costPrice: true } } } },
 };
 
-const requisitionNumber = (now = new Date()) =>
-  `REQ-${now.toISOString().slice(0, 10).replace(/-/g, "")}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+const docNumber = (prefix, now = new Date()) =>
+  `${prefix}-${now.toISOString().slice(0, 10).replace(/-/g, "")}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+const requisitionNumber = (now) => docNumber("REQ", now);
 
 const withTotals = (req) => {
   let estimatedValue = D(0);
@@ -21,8 +22,12 @@ const withTotals = (req) => {
   return { ...req, estimatedValue: round2(estimatedValue), issuedValue: round2(issuedValue) };
 };
 
+// Locks the requisition row (SELECT … FOR UPDATE) so concurrent approve / reject / issue
+// requests on the same requisition run one at a time and each sees the other's status change.
 const findOrThrow = async (tx, id) => {
-  const req = await tx.requisition.findUnique({ where: { id: uuid(id, "id") }, include: { items: true } });
+  const reqId = uuid(id, "id");
+  await tx.$queryRaw`SELECT id FROM requisition WHERE id = ${reqId}::uuid FOR UPDATE`;
+  const req = await tx.requisition.findUnique({ where: { id: reqId }, include: { items: true } });
   if (!req) throw notFound("Requisition");
   return req;
 };
@@ -83,10 +88,22 @@ const rejectRequisition = decide("REJECTED");
  * Issues an approved requisition from the central store to the outlet.
  * `lines` is optional: omitted lines are issued in full. Each issue is valued at the
  * item's weighted average cost and moves stock CENTRAL -> outlet.
+ *
+ * Double-deduction protection, in order:
+ *  1. the requisition row is locked and must be APPROVED (a second request waits, then sees ISSUED);
+ *  2. item stock rows are locked in item-id order (no deadlocks between concurrent issues);
+ *  3. issue_requisition_ledger.requisition_item_id is unique, so the database itself refuses
+ *     a second issue of the same line;
+ *  4. with an idempotency key, a retried request returns the original result instead of 409.
  */
-const issueInTx = async (tx, id, body, issuedBy, at = new Date()) => {
+const issueInTx = async (tx, id, body, issuedBy, at = new Date(), idempotencyKey) => {
   const req = await findOrThrow(tx, id);
+  if (idempotencyKey && req.status === "ISSUED" && req.issueIdempotencyKey === idempotencyKey) {
+    const original = await tx.requisition.findUnique({ where: { id: req.id }, include: REQ_INCLUDE });
+    return { ...withTotals(original), replayed: true };
+  }
   if (req.status !== "APPROVED") throw conflict(`Only APPROVED requisitions can be issued (status is ${req.status})`);
+  const issueNumber = docNumber("ISS", at);
   const overrides = new Map();
   for (const [i, raw] of (body.lines ?? []).entries()) {
     const lineId = uuid(raw.requisitionItemId, `lines[${i}].requisitionItemId`);
@@ -96,21 +113,40 @@ const issueInTx = async (tx, id, body, issuedBy, at = new Date()) => {
     if (!req.items.some((l) => l.id === lineId)) throw badRequest(`Line ${lineId} does not belong to this requisition`);
   }
 
-  for (const line of req.items) {
+  const lines = [...req.items].sort((a, b) => a.itemId.localeCompare(b.itemId) || a.id.localeCompare(b.id));
+  for (const line of lines) {
     const requested = qty(line.quantityRequested);
     const quantity = overrides.get(line.id) ?? requested;
     if (quantity > requested) {
       throw badRequest(`Cannot issue ${quantity}; only ${line.quantityRequested} requested for line ${line.id}`);
     }
     if (quantity === 0) continue;
-    const { unitCost, value } = await issueFromCentral(tx, {
+    const { unitCost, value, transactionId, allocations } = await issueFromCentral(tx, {
       itemId: line.itemId,
       quantity,
       type: "OUTLET_ISSUE",
       destination: req.outletDepartmentId,
       referenceId: req.id,
-      remarks: `Issue ${req.requisitionNumber}`,
+      remarks: `${issueNumber} for ${req.requisitionNumber}`,
       timestamp: at,
+      createdBy: issuedBy,
+    });
+    await tx.issueLedger.create({
+      data: {
+        issueNumber,
+        requisitionId: req.id,
+        requisitionItemId: line.id,
+        itemId: line.itemId,
+        outletDepartmentId: req.outletDepartmentId,
+        quantityRequested: requested,
+        quantityIssued: quantity,
+        unitCost,
+        issueValue: value,
+        batchAllocations: allocations,
+        issuedBy,
+        issuedAt: at,
+        transactionId,
+      },
     });
     await tx.outletStock.upsert({
       where: { outletDepartmentId_itemId: { outletDepartmentId: req.outletDepartmentId, itemId: line.itemId } },
@@ -125,14 +161,14 @@ const issueInTx = async (tx, id, body, issuedBy, at = new Date()) => {
 
   const updated = await tx.requisition.update({
     where: { id: req.id },
-    data: { status: "ISSUED", issuedBy, issuedAt: at },
+    data: { status: "ISSUED", issuedBy, issuedAt: at, ...(idempotencyKey && { issueIdempotencyKey: idempotencyKey }) },
     include: REQ_INCLUDE,
   });
   return withTotals(updated);
 };
 
-const issueRequisition = (id, body, issuedBy) =>
-  prisma.$transaction((tx) => issueInTx(tx, id, body, issuedBy), { timeout: 20000 });
+const issueRequisition = (id, body, issuedBy, idempotencyKey) =>
+  inTransaction(prisma, (tx) => issueInTx(tx, id, body, issuedBy, new Date(), idempotencyKey));
 
 // Issued quantity and value per department (and per item within it) for a period.
 const departmentConsumption = async ({ from, to } = {}) => {
@@ -188,7 +224,7 @@ const weekOf = (d) => {
 };
 
 const departmentLabel = (d) =>
-  d.subDepartment === "NONE" ? d.mainOutlet.replace(/_/g, " ") : `${d.mainOutlet} / ${d.subDepartment.replace(/_/g, " ")}`;
+  d.name ?? (d.subDepartment === "NONE" ? d.mainOutlet.replace(/_/g, " ") : `${d.mainOutlet} / ${d.subDepartment.replace(/_/g, " ")}`);
 
 const indentVsReceived = async (query = {}) => {
   const toDate = date(query.to, "to", { optional: true }) ?? new Date();

@@ -10,6 +10,8 @@ import MarketPrices from "./pages/MarketPrices";
 import Users from "./pages/Users";
 import Reports from "./pages/Reports";
 import IndentReport from "./pages/IndentReport";
+import Valuation from "./pages/Valuation";
+import Ledger from "./pages/Ledger";
 import NavBar from "./components/NavBar";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -32,6 +34,8 @@ function App() {
           ["/vendors", <Vendors />, MANAGERS],
           ["/market", <MarketPrices />, MANAGERS],
           ["/reports", <Reports />, MANAGERS],
+          ["/valuation", <Valuation />, MANAGERS],
+          ["/ledger", <Ledger />, MANAGERS],
           ["/users", <Users />, ["admin"]],
         ].map(([path, page, roles]) => (
           <Route key={path} path={path} element={<ProtectedRoute roles={roles}>{page}</ProtectedRoute>} />

@@ -13,6 +13,9 @@ const prisma = require("../src/db");
 const { createInTx, sendInTx, receiveInTx, closeInTx } = require("../src/services/purchasing");
 const { issueInTx } = require("../src/services/requisitions");
 const { issueFromCentral } = require("../src/services/ledger");
+const { outletDefaults } = require("../src/services/inventory");
+const { ensureSnapshots } = require("../src/services/valuation");
+const { refreshRatings } = require("../src/services/vendors");
 const { DAY_MS } = require("../src/lib/planning");
 
 const HISTORY_DAYS = 200;
@@ -58,22 +61,22 @@ const DEPARTMENTS = [
 // demand: mean units/day, cv: day-to-day variability, trend: market price drift over the period,
 // season: amplitude of weekly price swing, vendors: [primary, alternate], depts: who requisitions it.
 const ITEMS = [
-  { sku: "VEG-ONI", itemName: "Onion", category: "VEGETABLE", uom: "kg", price: 38, demand: 28, cv: 0.25, trend: 0.35, season: 0.08, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/NORTH_INDIAN", "FB/TANDOOR", "FB/STAFF_FOOD"], multiple: 5 },
-  { sku: "VEG-TOM", itemName: "Tomato", category: "VEGETABLE", uom: "kg", price: 30, demand: 24, cv: 0.3, trend: -0.2, season: 0.15, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/CONTINENTAL", "FB/NORTH_INDIAN", "FB/SOUTH_INDIAN"], multiple: 5 },
-  { sku: "VEG-POT", itemName: "Potato", category: "VEGETABLE", uom: "kg", price: 26, demand: 20, cv: 0.2, trend: 0.05, season: 0.03, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/STAFF_FOOD", "FB/CONTINENTAL"], multiple: 10 },
-  { sku: "VEG-COR", itemName: "Coriander Leaves", category: "VEGETABLE", uom: "kg", price: 60, demand: 3, cv: 0.5, trend: 0.25, season: 0.2, vendors: ["farm"], depts: ["FB/NORTH_INDIAN", "FB/SOUTH_INDIAN", "FB/IDLY_DOSA"] },
-  { sku: "GRO-RIC", itemName: "Basmati Rice", category: "GROCERY", uom: "kg", price: 95, demand: 18, cv: 0.15, trend: 0.04, season: 0.01, vendors: ["metro"], depts: ["MAIN_KITCHEN/NONE", "FB/NORTH_INDIAN", "FB/STAFF_FOOD"], multiple: 25 },
-  { sku: "GRO-ATT", itemName: "Wheat Flour (Atta)", category: "GROCERY", uom: "kg", price: 42, demand: 15, cv: 0.2, trend: 0.02, season: 0.01, vendors: ["metro"], depts: ["FB/TANDOOR", "FB/BAKERY", "FB/STAFF_FOOD"], multiple: 10 },
+  { sku: "VEG-ONI", itemName: "Onion", category: "VEGETABLE", uom: "kg", shelfLife: 21, price: 38, demand: 28, cv: 0.25, trend: 0.35, season: 0.08, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/NORTH_INDIAN", "FB/TANDOOR", "FB/STAFF_FOOD"], multiple: 5 },
+  { sku: "VEG-TOM", itemName: "Tomato", category: "VEGETABLE", uom: "kg", shelfLife: 6, price: 30, demand: 24, cv: 0.3, trend: -0.2, season: 0.15, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/CONTINENTAL", "FB/NORTH_INDIAN", "FB/SOUTH_INDIAN"], multiple: 5 },
+  { sku: "VEG-POT", itemName: "Potato", category: "VEGETABLE", uom: "kg", shelfLife: 21, price: 26, demand: 20, cv: 0.2, trend: 0.05, season: 0.03, vendors: ["farm", "metro"], depts: ["MAIN_KITCHEN/NONE", "FB/STAFF_FOOD", "FB/CONTINENTAL"], multiple: 10 },
+  { sku: "VEG-COR", itemName: "Coriander Leaves", category: "VEGETABLE", uom: "kg", shelfLife: 3, price: 60, demand: 3, cv: 0.5, trend: 0.25, season: 0.2, vendors: ["farm"], depts: ["FB/NORTH_INDIAN", "FB/SOUTH_INDIAN", "FB/IDLY_DOSA"] },
+  { sku: "GRO-RIC", itemName: "Basmati Rice", category: "DRY_GOODS", uom: "kg", price: 95, demand: 18, cv: 0.15, trend: 0.04, season: 0.01, vendors: ["metro"], depts: ["MAIN_KITCHEN/NONE", "FB/NORTH_INDIAN", "FB/STAFF_FOOD"], multiple: 25 },
+  { sku: "GRO-ATT", itemName: "Wheat Flour (Atta)", category: "DRY_GOODS", uom: "kg", price: 42, demand: 15, cv: 0.2, trend: 0.02, season: 0.01, vendors: ["metro"], depts: ["FB/TANDOOR", "FB/BAKERY", "FB/STAFF_FOOD"], multiple: 10 },
   { sku: "GRO-OIL", itemName: "Sunflower Oil", category: "GROCERY", uom: "ltr", price: 145, demand: 9, cv: 0.2, trend: 0.12, season: 0.02, vendors: ["metro"], depts: ["MAIN_KITCHEN/NONE", "FB/CHINESE", "FB/SOUTH_INDIAN"], multiple: 15 },
-  { sku: "GRO-URD", itemName: "Urad Dal", category: "GROCERY", uom: "kg", price: 128, demand: 5, cv: 0.3, trend: 0.06, season: 0.02, vendors: ["metro"], depts: ["FB/IDLY_DOSA", "FB/SOUTH_INDIAN"] },
-  { sku: "DAI-MLK", itemName: "Full Cream Milk", category: "DAIRY", uom: "ltr", price: 62, demand: 45, cv: 0.15, trend: 0.03, season: 0.01, vendors: ["dairy", "metro"], depts: ["FB/BAKERY", "FB/CONTINENTAL", "MAIN_KITCHEN/NONE", "BAR/NONE"], multiple: 5 },
-  { sku: "DAI-PAN", itemName: "Paneer", category: "DAIRY", uom: "kg", price: 360, demand: 6, cv: 0.35, trend: 0.05, season: 0.02, vendors: ["dairy"], depts: ["FB/TANDOOR", "FB/NORTH_INDIAN"] },
-  { sku: "DAI-BUT", itemName: "Butter (Unsalted)", category: "DAIRY", uom: "kg", price: 520, demand: 4, cv: 0.3, trend: 0.08, season: 0.01, vendors: ["dairy", "metro"], depts: ["FB/BAKERY", "FB/CONTINENTAL"] },
-  { sku: "CHK-CUR", itemName: "Chicken Curry Cut", category: "CHICKEN", uom: "kg", price: 240, demand: 14, cv: 0.35, trend: -0.1, season: 0.1, vendors: ["coastal"], depts: ["FB/TANDOOR", "FB/NORTH_INDIAN", "FB/CHINESE"] },
-  { sku: "MUT-CUR", itemName: "Mutton Curry Cut", category: "MUTTON", uom: "kg", price: 780, demand: 5, cv: 0.45, trend: 0.06, season: 0.04, vendors: ["coastal"], depts: ["FB/NORTH_INDIAN", "FB/TANDOOR"] },
-  { sku: "SEA-PRW", itemName: "Prawns (Medium)", category: "SEAFOOD", uom: "kg", price: 650, demand: 4, cv: 0.6, trend: 0.18, season: 0.12, vendors: ["coastal"], depts: ["FB/CONTINENTAL", "FB/CHINESE"] },
+  { sku: "GRO-URD", itemName: "Urad Dal", category: "DRY_GOODS", uom: "kg", price: 128, demand: 5, cv: 0.3, trend: 0.06, season: 0.02, vendors: ["metro"], depts: ["FB/IDLY_DOSA", "FB/SOUTH_INDIAN"] },
+  { sku: "DAI-MLK", itemName: "Full Cream Milk", category: "DAIRY", uom: "ltr", shelfLife: 4, price: 62, demand: 45, cv: 0.15, trend: 0.03, season: 0.01, vendors: ["dairy", "metro"], depts: ["FB/BAKERY", "FB/CONTINENTAL", "MAIN_KITCHEN/NONE", "BAR/NONE"], multiple: 5 },
+  { sku: "DAI-PAN", itemName: "Paneer", category: "DAIRY", uom: "kg", shelfLife: 5, price: 360, demand: 6, cv: 0.35, trend: 0.05, season: 0.02, vendors: ["dairy"], depts: ["FB/TANDOOR", "FB/NORTH_INDIAN"] },
+  { sku: "DAI-BUT", itemName: "Butter (Unsalted)", category: "DAIRY", uom: "kg", shelfLife: 60, price: 520, demand: 4, cv: 0.3, trend: 0.08, season: 0.01, vendors: ["dairy", "metro"], depts: ["FB/BAKERY", "FB/CONTINENTAL"] },
+  { sku: "CHK-CUR", itemName: "Chicken Curry Cut", category: "CHICKEN", uom: "kg", shelfLife: 3, price: 240, demand: 14, cv: 0.35, trend: -0.1, season: 0.1, vendors: ["coastal"], depts: ["FB/TANDOOR", "FB/NORTH_INDIAN", "FB/CHINESE"] },
+  { sku: "MUT-CUR", itemName: "Mutton Curry Cut", category: "MUTTON", uom: "kg", shelfLife: 3, price: 780, demand: 5, cv: 0.45, trend: 0.06, season: 0.04, vendors: ["coastal"], depts: ["FB/NORTH_INDIAN", "FB/TANDOOR"] },
+  { sku: "SEA-PRW", itemName: "Prawns (Medium)", category: "SEAFOOD", uom: "kg", shelfLife: 2, price: 650, demand: 4, cv: 0.6, trend: 0.18, season: 0.12, vendors: ["coastal"], depts: ["FB/CONTINENTAL", "FB/CHINESE"] },
   { sku: "BAR-WHS", itemName: "Blended Whisky 750ml", category: "BAR", uom: "pcs", price: 1450, demand: 3, cv: 0.6, trend: 0.0, season: 0.0, vendors: ["spirits"], depts: ["BAR/NONE"], multiple: 12 },
-  { sku: "BAR-SOD", itemName: "Soda 300ml", category: "BAR", uom: "pcs", price: 20, demand: 60, cv: 0.4, trend: 0.0, season: 0.0, vendors: ["spirits", "metro"], depts: ["BAR/NONE"], multiple: 24 },
+  { sku: "BAR-SOD", itemName: "Soda 300ml", category: "SOFT_BEVERAGES", uom: "pcs", price: 20, demand: 60, cv: 0.4, trend: 0.0, season: 0.0, vendors: ["spirits", "metro"], depts: ["BAR/NONE"], multiple: 24 },
   { sku: "LIN-BTW", itemName: "Bath Towel (White)", category: "LINEN", uom: "pcs", price: 420, demand: 4, cv: 0.5, trend: 0.02, season: 0.0, vendors: ["linen"], depts: ["HOUSEKEEPING/NONE"], multiple: 10 },
   { sku: "AME-SHP", itemName: "Shampoo Sachet 30ml", category: "AMENITIES", uom: "pcs", price: 9, demand: 140, cv: 0.2, trend: 0.0, season: 0.0, vendors: ["linen"], depts: ["HOUSEKEEPING/NONE"], multiple: 100 },
   { sku: "AME-SOP", itemName: "Guest Soap 40g", category: "AMENITIES", uom: "pcs", price: 12, demand: 130, cv: 0.2, trend: 0.0, season: 0.0, vendors: ["linen"], depts: ["HOUSEKEEPING/NONE"], multiple: 100 },
@@ -96,8 +99,16 @@ const marketPrice = (spec, day) => {
   return Math.round(spec.price * drift * wave * noise * 100) / 100;
 };
 
+// The ledgers are append-only; the purge flag (transaction-local) lets this reset delete them.
 const reset = async () => {
   await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('inventory.allow_ledger_purge', 'on', true)`,
+    prisma.auditLog.deleteMany(),
+    prisma.dailyValuation.deleteMany(),
+    prisma.outletRevenue.deleteMany(),
+    prisma.issueLedger.deleteMany(),
+    prisma.stockBatch.deleteMany(),
+    prisma.purchaseInward.deleteMany(),
     prisma.inventoryTransaction.deleteMany(),
     prisma.priceQuote.deleteMany(),
     prisma.requisitionItem.deleteMany(),
@@ -136,7 +147,8 @@ const main = async () => {
   }
   const deptByKey = {};
   for (const [mainOutlet, subDepartment] of DEPARTMENTS) {
-    deptByKey[`${mainOutlet}/${subDepartment}`] = (await prisma.outletDepartment.create({ data: { mainOutlet, subDepartment } })).id;
+    const data = { mainOutlet, subDepartment, ...outletDefaults(mainOutlet, subDepartment), costCenter: `CC-${100 + Object.keys(deptByKey).length}` };
+    deptByKey[`${mainOutlet}/${subDepartment}`] = (await prisma.outletDepartment.create({ data })).id;
   }
   const items = [];
   for (const [i, spec] of ITEMS.entries()) {
@@ -152,6 +164,7 @@ const main = async () => {
         reorderPoint: Math.ceil(spec.demand * 4),
         maxStockLevel: Math.ceil(spec.demand * 10),
         orderMultiple: spec.multiple ?? 1,
+        shelfLifeDays: spec.shelfLife ?? null,
         preferredVendorId: vendorByKey[spec.vendors[0]].id,
         centralStock: { create: {} },
       },
@@ -303,10 +316,13 @@ const main = async () => {
             }
             continue;
           }
-          const cover = item.demand * (vendor.leadTimeDays + 3);
+          // Short-life goods are bought for what can be used before they expire.
+          const coverDays = item.shelfLife ? Math.max(vendor.leadTimeDays + 1, Math.min(vendor.leadTimeDays + 10, item.shelfLife - 1)) : vendor.leadTimeDays + 10;
+          const cover = item.demand * (vendor.leadTimeDays + (item.shelfLife && item.shelfLife <= 7 ? 1 : 3));
           if (openOrderFor.has(item.id) || item.onHand >= cover || isToday) continue;
           if (day > HISTORY_DAYS - 6 && item.sku.charCodeAt(4) % 2 === 0) continue;
-          const qty = Math.ceil((item.demand * (vendor.leadTimeDays + 10) - item.onHand) / (item.multiple ?? 1)) * (item.multiple ?? 1);
+          const qty = Math.ceil((item.demand * coverDays - item.onHand) / (item.multiple ?? 1)) * (item.multiple ?? 1);
+          if (qty <= 0) continue;
           if (!byVendor.has(vendor.key)) byVendor.set(vendor.key, []);
           byVendor.get(vendor.key).push({
             itemId: item.id,
@@ -332,6 +348,39 @@ const main = async () => {
     }
     await adjustCentral(tx, { itemId: towel.id, quantityChange: -2, remarks: "Physical count variance" }).catch(() => {});
   });
+
+  // Outlet revenue so cost-of-goods percentages have something to divide by: each kitchen and the
+  // bar sell at a target cost ratio (food ~30%, bar ~22%) with day-to-day noise.
+  const outlets = await prisma.outletDepartment.findMany({ where: { outletType: { in: ["KITCHEN", "BAR"] } } });
+  const issued = await prisma.inventoryTransaction.groupBy({
+    by: ["destinationLocation"],
+    where: { type: "OUTLET_ISSUE" },
+    _sum: { transactionValue: true },
+  });
+  const issuedBy = new Map(issued.map((r) => [r.destinationLocation, Number(r._sum.transactionValue ?? 0)]));
+  const today = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  const revenueRows = [];
+  for (const o of outlets) {
+    const dailyCost = (issuedBy.get(o.id) ?? 0) / HISTORY_DAYS;
+    if (dailyCost <= 0) continue;
+    const target = o.outletType === "BAR" ? 0.22 : o.subDepartment === "STAFF_FOOD" ? null : 0.3;
+    if (!target) continue;
+    for (let d = 1; d <= HISTORY_DAYS; d += 1) {
+      const businessDate = new Date(today.getTime() - d * DAY_MS);
+      const weekend = [5, 6].includes(businessDate.getUTCDay()) ? 1.25 : 1;
+      revenueRows.push({
+        outletDepartmentId: o.id,
+        businessDate,
+        revenue: Math.round((dailyCost / target) * weekend * (1 + 0.12 * normal()) * 100) / 100,
+        recordedBy: "seed",
+      });
+    }
+  }
+  await prisma.outletRevenue.createMany({ data: revenueRows });
+
+  const snapshots = await ensureSnapshots();
+  const ratings = await refreshRatings();
+  console.log(`Valuation snapshots: ${snapshots.rows} rows; vendor ratings: ${ratings.vendorsRated} of ${ratings.vendors}.`);
 
   console.log(`Demo logins: admin@hotel.example, approver@hotel.example, staff@hotel.example / password "${password}"`);
   console.log(

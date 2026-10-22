@@ -89,3 +89,29 @@ button.link { background: none; border: none; color: #3538cd; cursor: pointer; p
 .heat-legend span { display: inline-block; width: 22px; height: 10px; }
 .heat-legend span:first-of-type { margin-left: 6px; }
 .heat-legend span:last-of-type { margin-right: 6px; }
+
+/* Stock health and expiry statuses */
+.badge.EXPIRED, .badge.NON_MOVING { background: #fde2e1; color: #b42318; }
+.badge.EXPIRING, .badge.AT_RISK, .badge.SLOW { background: #fef0c7; color: #93370d; }
+.badge.HEALTHY { background: #dcfae6; color: #067647; }
+
+/* ABC-XYZ matrix */
+.abc-matrix { display: grid; grid-template-columns: minmax(0, 0.6fr) repeat(3, minmax(0, 1fr)); gap: 6px; }
+.abc-head { font-weight: 600; font-size: 13px; color: #52514e; padding: 6px 8px; align-self: center; }
+.abc-cell { border-radius: 8px; padding: 10px; font-size: 13px; min-width: 0; }
+.abc-cell p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.abc-cell-top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.abc-A { background: #e0eaff; }
+.abc-B { background: #eef2fb; }
+.abc-C { background: #f6f6f3; }
+@media (max-width: 700px) {
+  .abc-matrix { grid-template-columns: minmax(0, 1fr); }
+  .abc-corner, .abc-matrix > .abc-head:nth-child(-n + 4) { display: none; }
+}
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 16px 0 8px; border-bottom: 1px solid #e1e0d9; }
+.tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; color: #52514e; }
+.tabs button.active { border-bottom-color: #2a78d6; color: #1d1d1b; font-weight: 600; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.audit-body { display: block; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

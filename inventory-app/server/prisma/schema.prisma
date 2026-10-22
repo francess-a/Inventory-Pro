@@ -1,6 +1,18 @@
 // Prisma schema for the hotel centralized warehouse inventory management system.
-// Database: PostgreSQL
-// Quantities are Decimal(12, 3) so weighed and measured goods (2.5 kg, 0.75 ltr) can be recorded.
+// Database: PostgreSQL. The physical schema is snake_case (see prisma/schema.sql for the
+// generated DDL plus the triggers and CHECK constraints added by the migrations).
+//
+// Quantities are Decimal(12, 3) so weighed and measured goods (2.5 kg, 0.75 ltr) can be
+// recorded; unit costs are Decimal(12, 2) and values Decimal(14, 2).
+//
+// Core tables (names fixed by the architecture blueprint, docs/central-store-blueprint.md):
+//   inventory_master               items with min/max thresholds and reorder point
+//   vendor_master                  suppliers with a rating matrix
+//   purchase_inward_ledger         goods received, one row per GRN line, with batch and invoice
+//   outlet_master                  kitchens, bars and departments
+//   issue_requisition_ledger       stock issued from the central store to an outlet
+//   closing_stock_daily_valuation  end-of-day quantity and value per item
+//   stock_transaction_ledger       every central-stock movement, hash-chained and append-only
 
 generator client {
   provider = "prisma-client-js"
@@ -15,33 +27,20 @@ datasource db {
 // Enums
 // ─────────────────────────────────────────────────────────────
 
-enum ItemCategory {
-  GROCERY
-  VEGETABLE
-  DAIRY
-  PORK
-  CHICKEN
-  BEEF
-  BIRDS
-  MUTTON
-  SEAFOOD
-  LINEN
-  AMENITIES
-  SPARES
-  FRONT_OFFICE
-  BAR
-}
-
 enum AbcCategory {
   A
   B
   C
+
+  @@map("abc_category")
 }
 
 enum XyzCategory {
   X
   Y
   Z
+
+  @@map("xyz_category")
 }
 
 enum PurchaseOrderStatus {
@@ -50,6 +49,8 @@ enum PurchaseOrderStatus {
   RECEIVED
   PARTIALLY_RECEIVED
   CANCELLED
+
+  @@map("purchase_order_status")
 }
 
 enum MainOutlet {
@@ -59,6 +60,8 @@ enum MainOutlet {
   BAR
   MAINTENANCE
   MAIN_KITCHEN
+
+  @@map("main_outlet")
 }
 
 enum SubDepartment {
@@ -71,6 +74,21 @@ enum SubDepartment {
   IDLY_DOSA
   STAFF_FOOD
   NONE
+
+  @@map("sub_department")
+}
+
+// What kind of operation an outlet is; drives cost-of-goods grouping (food vs beverage vs operating supplies).
+enum OutletType {
+  KITCHEN
+  RESTAURANT
+  BAR
+  HOUSEKEEPING
+  FRONT_OFFICE
+  ENGINEERING
+  OTHER
+
+  @@map("outlet_type")
 }
 
 enum RequisitionStatus {
@@ -78,6 +96,8 @@ enum RequisitionStatus {
   APPROVED
   ISSUED
   REJECTED
+
+  @@map("requisition_status")
 }
 
 enum TransactionType {
@@ -85,222 +105,495 @@ enum TransactionType {
   OUTLET_ISSUE
   ADJUSTMENT
   WASTE
+
+  @@map("transaction_type")
 }
 
-// Same role names the frontend and earlier auth service used.
 enum UserRole {
-  user // store staff
+  user // store staff: raise and track requisitions only
   approver
   admin
+
+  @@map("user_role")
 }
 
 enum PriceSource {
   PURCHASE_RECEIPT // actual landed price from a goods receipt
   VENDOR_QUOTE // quotation received from a supplier
   MARKET_FEED // wholesale / mandi / market rate (manual entry or external feed)
+
+  @@map("price_source")
+}
+
+enum BatchSource {
+  PURCHASE // created by a goods receipt (purchase_inward_ledger row)
+  OPENING // stock that existed before batch tracking was switched on
+  ADJUSTMENT // positive stock-count correction
+
+  @@map("batch_source")
 }
 
 // ─────────────────────────────────────────────────────────────
-// Models
+// Users
 // ─────────────────────────────────────────────────────────────
 
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   name         String
   email        String   @unique // stored lower-case
-  passwordHash String
+  passwordHash String   @map("password_hash")
   role         UserRole @default(user)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("app_user")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Master data
+// ─────────────────────────────────────────────────────────────
+
+// Multi-tier item categories: level 1 group (Food, Beverage, Non-food), level 2 category
+// (Groceries, Dairy, Meat & Poultry, …) and optional level 3 sub-category (Chicken, Dry goods, …).
+// Items reference a category by its stable `code`.
+model ItemCategory {
+  id                   String  @id @default(uuid()) @db.Uuid
+  code                 String  @unique
+  name                 String
+  parentId             String? @map("parent_id") @db.Uuid
+  level                Int // 1..3, enforced by a CHECK constraint
+  isPerishable         Boolean @default(false) @map("is_perishable")
+  defaultShelfLifeDays Int?    @map("default_shelf_life_days") // used for expiry dates when a receipt gives none
+  sortOrder            Int     @default(0) @map("sort_order")
+
+  parent   ItemCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children ItemCategory[] @relation("CategoryTree")
+  items    Item[]
+
+  @@index([parentId])
+  @@map("item_category")
 }
 
 model Item {
-  id            String       @id @default(uuid()) @db.Uuid
-  sku           String       @unique
-  barcode       String       @unique
-  itemName      String
-  category      ItemCategory
-  costPrice     Decimal      @db.Decimal(12, 2) // weighted average cost, updated on every receipt
-  unitOfMeasure String // e.g. kg, ltr, pcs, pack
-  minStockLevel Decimal      @db.Decimal(12, 3) // safety stock
-  maxStockLevel Decimal      @db.Decimal(12, 3)
-  reorderPoint  Decimal      @db.Decimal(12, 3)
+  id            String  @id @default(uuid()) @db.Uuid
+  sku           String  @unique
+  barcode       String  @unique
+  itemName      String  @map("item_name")
+  category      String // item_category.code
+  costPrice     Decimal @map("cost_price") @db.Decimal(12, 2) // weighted average cost, updated on every receipt
+  unitOfMeasure String  @map("unit_of_measure") // e.g. kg, ltr, pcs, pack
+  minStockLevel Decimal @map("min_stock_level") @db.Decimal(12, 3) // safety stock
+  maxStockLevel Decimal @map("max_stock_level") @db.Decimal(12, 3)
+  reorderPoint  Decimal @map("reorder_point") @db.Decimal(12, 3)
+  shelfLifeDays Int?    @map("shelf_life_days") // overrides the category default; caps order quantities of perishables
 
   // Classifications are computed by the application (consumption value / demand
   // variability analysis), so they stay null until the first analysis run.
-  abcCategory AbcCategory?
-  xyzCategory XyzCategory?
+  abcCategory AbcCategory? @map("abc_category")
+  xyzCategory XyzCategory? @map("xyz_category")
 
-  // When true, the replenishment engine overwrites min/max/reorder point from
-  // consumption history. Set to false to keep manually maintained levels.
-  autoPlanning      Boolean @default(true)
-  orderMultiple     Decimal @default(1) @db.Decimal(12, 3) // suggested order quantities are rounded up to this pack size
-  preferredVendorId String? @db.Uuid
-  isActive          Boolean @default(true)
+  // When true, the replenishment engine overwrites min/max/reorder point from the demand
+  // forecast. Set to false to keep manually maintained levels.
+  autoPlanning      Boolean  @default(true) @map("auto_planning")
+  orderMultiple     Decimal  @default(1) @map("order_multiple") @db.Decimal(12, 3) // order quantities are rounded to this pack size
+  preferredVendorId String?  @map("preferred_vendor_id") @db.Uuid
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
 
+  categoryRef      ItemCategory           @relation(fields: [category], references: [code], onUpdate: Cascade, onDelete: Restrict)
   centralStock     CentralStock?
   outletStocks     OutletStock[]
   transactionLogs  InventoryTransaction[]
   orderItems       PurchaseOrderItem[]
   requisitionItems RequisitionItem[]
   priceQuotes      PriceQuote[]
+  inwardLines      PurchaseInward[]
+  issueLines       IssueLedger[]
+  batches          StockBatch[]
+  valuations       DailyValuation[]
   preferredVendor  Vendor?                @relation("PreferredVendor", fields: [preferredVendorId], references: [id], onDelete: SetNull)
 
   @@index([category])
+  @@map("inventory_master")
 }
 
 model Vendor {
-  id           String  @id @default(uuid()) @db.Uuid
-  vendorName   String
-  contactName  String
-  email        String
-  phone        String
-  leadTimeDays Int // Expected time between PO placement and dock delivery
-  isActive     Boolean @default(true)
+  id               String    @id @default(uuid()) @db.Uuid
+  vendorName       String    @map("vendor_name")
+  contactName      String    @map("contact_name")
+  email            String
+  phone            String
+  address          String?
+  taxId            String?   @map("tax_id") // GSTIN / VAT number
+  paymentTermsDays Int       @default(30) @map("payment_terms_days")
+  leadTimeDays     Int       @map("lead_time_days") // promised time between PO placement and dock delivery
+  isActive         Boolean   @default(true) @map("is_active")
+  // Rating matrix: { quality, delivery, price, fillRate, weights, computedAt } scored 0-100,
+  // refreshed from the vendor scorecard. overallRating is the weighted total.
+  ratingMatrix     Json?     @map("rating_matrix")
+  overallRating    Decimal?  @map("overall_rating") @db.Decimal(5, 2)
+  ratedAt          DateTime? @map("rated_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   purchaseOrders PurchaseOrder[]
   priceQuotes    PriceQuote[]
-  preferredItems Item[]          @relation("PreferredVendor")
-}
+  inwardLines    PurchaseInward[]
+  preferredItems Item[]           @relation("PreferredVendor")
 
-model PurchaseOrder {
-  id                 String              @id @default(uuid()) @db.Uuid
-  poNumber           String              @unique
-  vendorId           String              @db.Uuid
-  status             PurchaseOrderStatus @default(DRAFT)
-  createdAt          DateTime            @default(now())
-  sentAt             DateTime?
-  expectedDeliveryAt DateTime? // sentAt + vendor lead time unless overridden
-  receivedAt         DateTime? // first dock delivery; drives actual lead time
-  invoiceNumber      String?
-  notes              String?
-
-  items  PurchaseOrderItem[]
-  vendor Vendor              @relation(fields: [vendorId], references: [id])
-
-  @@index([vendorId])
-  @@index([status])
-}
-
-model PurchaseOrderItem {
-  id               String  @id @default(uuid()) @db.Uuid
-  poId             String  @db.Uuid
-  itemId           String  @db.Uuid
-  quantityOrdered  Decimal @db.Decimal(12, 3)
-  quantityReceived Decimal @default(0) @db.Decimal(12, 3)
-  quantityRejected Decimal @default(0) @db.Decimal(12, 3)
-  rejectionReason  String?
-  unitPrice        Decimal @db.Decimal(12, 2)
-
-  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
-  item          Item          @relation(fields: [itemId], references: [id])
-
-  @@index([poId])
-  @@index([itemId])
+  @@map("vendor_master")
 }
 
 model OutletDepartment {
   id            String        @id @default(uuid()) @db.Uuid
-  mainOutlet    MainOutlet
-  subDepartment SubDepartment @default(NONE)
+  code          String        @unique // e.g. FB-TANDOOR
+  name          String // display name, e.g. "F&B – Tandoor"
+  mainOutlet    MainOutlet    @map("main_outlet")
+  subDepartment SubDepartment @default(NONE) @map("sub_department")
+  outletType    OutletType    @default(OTHER) @map("outlet_type")
+  costCenter    String?       @map("cost_center")
+  isActive      Boolean       @default(true) @map("is_active")
+  createdAt     DateTime      @default(now()) @map("created_at")
 
   outletStocks OutletStock[]
   requisitions Requisition[]
+  issueLines   IssueLedger[]
+  revenues     OutletRevenue[]
 
   @@unique([mainOutlet, subDepartment])
+  @@map("outlet_master")
 }
+
+// ─────────────────────────────────────────────────────────────
+// Purchasing
+// ─────────────────────────────────────────────────────────────
+
+model PurchaseOrder {
+  id                 String              @id @default(uuid()) @db.Uuid
+  poNumber           String              @unique @map("po_number")
+  vendorId           String              @map("vendor_id") @db.Uuid
+  status             PurchaseOrderStatus @default(DRAFT)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  sentAt             DateTime?           @map("sent_at")
+  expectedDeliveryAt DateTime?           @map("expected_delivery_at") // sentAt + vendor lead time unless overridden
+  receivedAt         DateTime?           @map("received_at") // first dock delivery; drives actual lead time
+  invoiceNumber      String?             @map("invoice_number") // latest invoice; every invoice is on purchase_inward_ledger
+  notes              String?
+
+  items       PurchaseOrderItem[]
+  inwardLines PurchaseInward[]
+  vendor      Vendor              @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+  @@index([status])
+  @@map("purchase_order")
+}
+
+model PurchaseOrderItem {
+  id               String  @id @default(uuid()) @db.Uuid
+  poId             String  @map("po_id") @db.Uuid
+  itemId           String  @map("item_id") @db.Uuid
+  quantityOrdered  Decimal @map("quantity_ordered") @db.Decimal(12, 3)
+  quantityReceived Decimal @default(0) @map("quantity_received") @db.Decimal(12, 3)
+  quantityRejected Decimal @default(0) @map("quantity_rejected") @db.Decimal(12, 3)
+  rejectionReason  String? @map("rejection_reason")
+  unitPrice        Decimal @map("unit_price") @db.Decimal(12, 2)
+
+  purchaseOrder PurchaseOrder    @relation(fields: [poId], references: [id], onDelete: Cascade)
+  item          Item             @relation(fields: [itemId], references: [id])
+  inwardLines   PurchaseInward[]
+
+  @@index([poId])
+  @@index([itemId])
+  @@map("purchase_order_item")
+}
+
+// Goods received: one append-only row per PO line per delivery (GRN line), with the batch,
+// expiry and supplier invoice it arrived on.
+model PurchaseInward {
+  id                  String    @id @default(uuid()) @db.Uuid
+  grnNumber           String    @map("grn_number") // one GRN per delivery; shared by its lines
+  purchaseOrderId     String    @map("purchase_order_id") @db.Uuid
+  purchaseOrderItemId String    @map("purchase_order_item_id") @db.Uuid
+  itemId              String    @map("item_id") @db.Uuid
+  vendorId            String    @map("vendor_id") @db.Uuid
+  batchNumber         String    @map("batch_number")
+  manufactureDate     DateTime? @map("manufacture_date") @db.Date
+  expiryDate          DateTime? @map("expiry_date") @db.Date
+  quantityReceived    Decimal   @map("quantity_received") @db.Decimal(12, 3) // accepted into stock
+  quantityRejected    Decimal   @default(0) @map("quantity_rejected") @db.Decimal(12, 3)
+  rejectionReason     String?   @map("rejection_reason")
+  unitOfMeasure       String    @map("unit_of_measure")
+  unitPrice           Decimal   @map("unit_price") @db.Decimal(12, 2)
+  lineValue           Decimal   @map("line_value") @db.Decimal(14, 2) // quantityReceived × unitPrice
+  invoiceNumber       String?   @map("invoice_number")
+  invoiceDate         DateTime? @map("invoice_date") @db.Date
+  receivedBy          String    @map("received_by")
+  receivedAt          DateTime  @map("received_at")
+  transactionId       String?   @unique @map("transaction_id") @db.Uuid // null when the whole line was rejected
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  purchaseOrder     PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  purchaseOrderItem PurchaseOrderItem     @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  item              Item                  @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  vendor            Vendor                @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  transaction       InventoryTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  batch             StockBatch?
+
+  @@index([itemId, receivedAt])
+  @@index([vendorId, receivedAt])
+  @@index([purchaseOrderId])
+  @@index([grnNumber])
+  @@index([invoiceNumber])
+  @@index([expiryDate])
+  @@map("purchase_inward_ledger")
+}
+
+// Stock layers in the central store. Issues consume them first-expiry-first-out (then
+// oldest receipt first), which gives batch traceability and inventory ageing. The sum of
+// quantityRemaining per item always equals central_stock.quantity_on_hand.
+model StockBatch {
+  id                String      @id @default(uuid()) @db.Uuid
+  itemId            String      @map("item_id") @db.Uuid
+  inwardId          String?     @unique @map("inward_id") @db.Uuid
+  source            BatchSource
+  batchNumber       String      @map("batch_number")
+  expiryDate        DateTime?   @map("expiry_date") @db.Date
+  receivedAt        DateTime    @map("received_at")
+  unitCost          Decimal     @map("unit_cost") @db.Decimal(12, 2)
+  quantityReceived  Decimal     @map("quantity_received") @db.Decimal(12, 3)
+  quantityRemaining Decimal     @map("quantity_remaining") @db.Decimal(12, 3) // CHECK >= 0
+
+  item   Item            @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  inward PurchaseInward? @relation(fields: [inwardId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, expiryDate, receivedAt])
+  @@map("stock_batch")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Stock
+// ─────────────────────────────────────────────────────────────
 
 model CentralStock {
   id             String  @id @default(uuid()) @db.Uuid
-  itemId         String  @unique @db.Uuid
-  quantityOnHand Decimal @default(0) @db.Decimal(12, 3)
-  totalValue     Decimal @default(0) @db.Decimal(14, 2) // quantityOnHand * costPrice
+  itemId         String  @unique @map("item_id") @db.Uuid
+  quantityOnHand Decimal @default(0) @map("quantity_on_hand") @db.Decimal(12, 3) // CHECK >= 0
+  totalValue     Decimal @default(0) @map("total_value") @db.Decimal(14, 2) // quantityOnHand × costPrice
 
   item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@map("central_stock")
 }
 
 model OutletStock {
   id                 String  @id @default(uuid()) @db.Uuid
-  outletDepartmentId String  @db.Uuid
-  itemId             String  @db.Uuid
-  quantityOnHand     Decimal @default(0) @db.Decimal(12, 3)
+  outletDepartmentId String  @map("outlet_department_id") @db.Uuid
+  itemId             String  @map("item_id") @db.Uuid
+  quantityOnHand     Decimal @default(0) @map("quantity_on_hand") @db.Decimal(12, 3) // CHECK >= 0
 
   item       Item             @relation(fields: [itemId], references: [id], onDelete: Cascade)
   department OutletDepartment @relation(fields: [outletDepartmentId], references: [id], onDelete: Cascade)
 
   @@unique([outletDepartmentId, itemId])
   @@index([itemId])
+  @@map("outlet_stock")
 }
 
+// ─────────────────────────────────────────────────────────────
+// Requisitions and issues
+// ─────────────────────────────────────────────────────────────
+
 model Requisition {
-  id                 String            @id @default(uuid()) @db.Uuid
-  requisitionNumber  String            @unique
-  outletDepartmentId String            @db.Uuid
-  status             RequisitionStatus @default(PENDING)
-  requestedBy        String
-  createdAt          DateTime          @default(now())
-  approvedBy         String?
-  approvedAt         DateTime?
-  issuedBy           String?
-  issuedAt           DateTime?
-  remarks            String?
+  id                  String            @id @default(uuid()) @db.Uuid
+  requisitionNumber   String            @unique @map("requisition_number")
+  outletDepartmentId  String            @map("outlet_department_id") @db.Uuid
+  status              RequisitionStatus @default(PENDING)
+  requestedBy         String            @map("requested_by")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  approvedBy          String?           @map("approved_by")
+  approvedAt          DateTime?         @map("approved_at")
+  issuedBy            String?           @map("issued_by")
+  issuedAt            DateTime?         @map("issued_at")
+  issueIdempotencyKey String?           @unique @map("issue_idempotency_key") // client key of the issue request; replays return the first result
+  remarks             String?
 
   items      RequisitionItem[]
+  issueLines IssueLedger[]
   department OutletDepartment  @relation(fields: [outletDepartmentId], references: [id])
 
   @@index([outletDepartmentId])
   @@index([status])
+  @@index([createdAt])
+  @@map("requisition")
 }
 
 model RequisitionItem {
   id                String   @id @default(uuid()) @db.Uuid
-  requisitionId     String   @db.Uuid
-  itemId            String   @db.Uuid
-  quantityRequested Decimal  @db.Decimal(12, 3)
-  quantityIssued    Decimal  @default(0) @db.Decimal(12, 3)
-  unitCost          Decimal? @db.Decimal(12, 2) // weighted average cost at the moment of issue
-  issuedValue       Decimal  @default(0) @db.Decimal(14, 2)
+  requisitionId     String   @map("requisition_id") @db.Uuid
+  itemId            String   @map("item_id") @db.Uuid
+  quantityRequested Decimal  @map("quantity_requested") @db.Decimal(12, 3)
+  quantityIssued    Decimal  @default(0) @map("quantity_issued") @db.Decimal(12, 3)
+  unitCost          Decimal? @map("unit_cost") @db.Decimal(12, 2) // weighted average cost at the moment of issue
+  issuedValue       Decimal  @default(0) @map("issued_value") @db.Decimal(14, 2)
 
-  requisition Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
-  item        Item        @relation(fields: [itemId], references: [id])
+  requisition Requisition  @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  item        Item         @relation(fields: [itemId], references: [id])
+  issueLine   IssueLedger?
 
   @@index([requisitionId])
   @@index([itemId])
+  @@map("requisition_item")
 }
 
+// Stock issued from the central store to an outlet: one append-only row per issued
+// requisition line. requisitionItemId is unique, so a line can never be issued twice.
+model IssueLedger {
+  id                 String   @id @default(uuid()) @db.Uuid
+  issueNumber        String   @map("issue_number") // one per issue request; shared by its lines
+  requisitionId      String   @map("requisition_id") @db.Uuid
+  requisitionItemId  String   @unique @map("requisition_item_id") @db.Uuid
+  itemId             String   @map("item_id") @db.Uuid
+  outletDepartmentId String   @map("outlet_department_id") @db.Uuid
+  quantityRequested  Decimal  @map("quantity_requested") @db.Decimal(12, 3)
+  quantityIssued     Decimal  @map("quantity_issued") @db.Decimal(12, 3)
+  unitCost           Decimal  @map("unit_cost") @db.Decimal(12, 2)
+  issueValue         Decimal  @map("issue_value") @db.Decimal(14, 2)
+  batchAllocations   Json     @map("batch_allocations") // [{ batchId, batchNumber, expiryDate, quantity }]
+  issuedBy           String   @map("issued_by")
+  issuedAt           DateTime @map("issued_at")
+  transactionId      String   @unique @map("transaction_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  requisition     Requisition          @relation(fields: [requisitionId], references: [id], onDelete: Restrict)
+  requisitionItem RequisitionItem      @relation(fields: [requisitionItemId], references: [id], onDelete: Restrict)
+  item            Item                 @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  outlet          OutletDepartment     @relation(fields: [outletDepartmentId], references: [id], onDelete: Restrict)
+  transaction     InventoryTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@index([outletDepartmentId, issuedAt])
+  @@index([itemId, issuedAt])
+  @@index([requisitionId])
+  @@map("issue_requisition_ledger")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ledger, valuation, revenue and audit
+// ─────────────────────────────────────────────────────────────
+
+// Every change to central stock. Append-only (UPDATE/DELETE/TRUNCATE are blocked by
+// triggers) and hash-chained per item: entryHash = SHA-256(prevHash | canonical row), with
+// (itemId, prevHash) unique so the chain can never fork.
 model InventoryTransaction {
   id                       String          @id @default(uuid()) @db.Uuid
-  itemId                   String          @db.Uuid
+  seq                      BigInt          @unique @default(autoincrement())
+  itemId                   String          @map("item_id") @db.Uuid
   type                     TransactionType
-  sourceLocation           String // 'CENTRAL', 'VENDOR:<uuid>' or OutletDepartment UUID
-  destinationLocation      String // 'CENTRAL', OutletDepartment UUID or 'WASTE_BIN'
+  sourceLocation           String          @map("source_location") // 'CENTRAL', 'VENDOR:<uuid>', 'ADJUSTMENT' or an outlet UUID
+  destinationLocation      String          @map("destination_location") // 'CENTRAL', an outlet UUID, 'ADJUSTMENT' or 'WASTE_BIN'
   quantity                 Decimal         @db.Decimal(12, 3)
-  unitCost                 Decimal         @db.Decimal(12, 2)
-  transactionValue         Decimal         @db.Decimal(14, 2)
-  closingStockCentral      Decimal         @db.Decimal(12, 3)
-  closingStockCentralValue Decimal         @db.Decimal(14, 2)
-  referenceId              String? // PurchaseOrder / Requisition id that caused the movement
+  unitCost                 Decimal         @map("unit_cost") @db.Decimal(12, 2)
+  transactionValue         Decimal         @map("transaction_value") @db.Decimal(14, 2)
+  closingStockCentral      Decimal         @map("closing_stock_central") @db.Decimal(12, 3)
+  closingStockCentralValue Decimal         @map("closing_stock_central_value") @db.Decimal(14, 2)
+  referenceId              String?         @map("reference_id") // PurchaseOrder / Requisition id that caused the movement
   remarks                  String?
-  timestamp                DateTime        @default(now())
+  createdBy                String?         @map("created_by")
+  timestamp                DateTime        @default(now()) // business time of the movement
+  recordedAt               DateTime        @default(now()) @map("recorded_at") // when the row was written
+  prevHash                 String          @map("prev_hash")
+  entryHash                String          @unique @map("entry_hash")
 
-  item Item @relation(fields: [itemId], references: [id])
+  item       Item            @relation(fields: [itemId], references: [id])
+  inwardLine PurchaseInward?
+  issueLine  IssueLedger?
 
+  @@unique([itemId, prevHash])
   @@index([itemId, timestamp])
   @@index([type, timestamp])
+  @@index([timestamp])
+  @@map("stock_transaction_ledger")
+}
+
+// End-of-day position per item, derived from the ledger. Regenerating a day gives the same
+// figures, so rows are upserted by (businessDate, itemId).
+model DailyValuation {
+  businessDate       DateTime @map("business_date") @db.Date
+  itemId             String   @map("item_id") @db.Uuid
+  openingQty         Decimal  @map("opening_qty") @db.Decimal(12, 3)
+  openingValue       Decimal  @map("opening_value") @db.Decimal(14, 2)
+  receivedQty        Decimal  @map("received_qty") @db.Decimal(12, 3)
+  receivedValue      Decimal  @map("received_value") @db.Decimal(14, 2)
+  issuedQty          Decimal  @map("issued_qty") @db.Decimal(12, 3)
+  issuedValue        Decimal  @map("issued_value") @db.Decimal(14, 2)
+  wasteQty           Decimal  @map("waste_qty") @db.Decimal(12, 3)
+  wasteValue         Decimal  @map("waste_value") @db.Decimal(14, 2)
+  adjustmentQty      Decimal  @map("adjustment_qty") @db.Decimal(12, 3)
+  adjustmentValue    Decimal  @map("adjustment_value") @db.Decimal(14, 2)
+  closingQty         Decimal  @map("closing_qty") @db.Decimal(12, 3)
+  wacUnitCost        Decimal  @map("wac_unit_cost") @db.Decimal(12, 2)
+  closingValueWac    Decimal  @map("closing_value_wac") @db.Decimal(14, 2) // book value (weighted average cost)
+  closingValueFifo   Decimal  @map("closing_value_fifo") @db.Decimal(14, 2) // same quantity priced at the latest receipts
+  avgDailyIssueValue Decimal  @map("avg_daily_issue_value") @db.Decimal(14, 2) // trailing 30 days
+  daysOnHand         Decimal? @map("days_on_hand") @db.Decimal(10, 1) // null when nothing was issued in 30 days
+  generatedAt        DateTime @default(now()) @updatedAt @map("generated_at")
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@id([businessDate, itemId])
+  @@index([itemId, businessDate])
+  @@map("closing_stock_daily_valuation")
+}
+
+// Outlet sales per business day, used for cost-of-goods percentages (food cost %, beverage cost %).
+model OutletRevenue {
+  outletDepartmentId String   @map("outlet_department_id") @db.Uuid
+  businessDate       DateTime @map("business_date") @db.Date
+  revenue            Decimal  @db.Decimal(14, 2)
+  recordedBy         String   @map("recorded_by")
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
+
+  outlet OutletDepartment @relation(fields: [outletDepartmentId], references: [id], onDelete: Restrict)
+
+  @@id([outletDepartmentId, businessDate])
+  @@index([businessDate])
+  @@map("outlet_revenue_daily")
 }
 
 model PriceQuote {
   id         String      @id @default(uuid()) @db.Uuid
-  itemId     String      @db.Uuid
-  vendorId   String?     @db.Uuid // null for market rates not tied to a supplier
+  itemId     String      @map("item_id") @db.Uuid
+  vendorId   String?     @map("vendor_id") @db.Uuid // null for market rates not tied to a supplier
   source     PriceSource
-  unitPrice  Decimal     @db.Decimal(12, 2)
+  unitPrice  Decimal     @map("unit_price") @db.Decimal(12, 2)
   market     String? // e.g. 'Koyambedu wholesale', 'Metro Cash & Carry'
-  recordedAt DateTime    @default(now())
+  recordedAt DateTime    @default(now()) @map("recorded_at")
 
   item   Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
   vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@index([itemId, recordedAt])
   @@index([vendorId])
+  @@map("price_quote")
+}
+
+// Who did what through the API: every create/update/action request with its outcome.
+// Append-only (blocked UPDATE/DELETE/TRUNCATE).
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  actorId     String?  @map("actor_id")
+  actorName   String?  @map("actor_name")
+  actorRole   String?  @map("actor_role")
+  method      String
+  path        String
+  statusCode  Int      @map("status_code")
+  entityId    String?  @map("entity_id")
+  requestBody Json?    @map("request_body") // secrets removed
+  ipAddress   String?  @map("ip_address")
+
+  @@index([occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([entityId])
+  @@map("audit_log")
 }

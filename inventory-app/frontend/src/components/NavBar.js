@@ -33,7 +33,9 @@ export default function NavBar() {
             <NavLink to="/vendors">Vendors</NavLink>
             <NavLink to="/market">Market Prices</NavLink>
             <NavLink to="/reports">Reports</NavLink>
+            <NavLink to="/valuation">Valuation</NavLink>
             <NavLink to="/indent-report">Indent vs Received</NavLink>
+            <NavLink to="/ledger">Ledger &amp; Audit</NavLink>
             {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
           </>
         )}
