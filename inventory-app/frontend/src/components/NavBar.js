@@ -17,12 +17,28 @@ export default function NavBar() {
 
   return (
     <nav className="nav-bar">
-      <div className="nav-brand">Inventory App</div>
+      <div className="nav-brand">Hotel Central Store</div>
       <div className="nav-links">
-        <NavLink to="/">Dashboard</NavLink>
-        <NavLink to="/items">Items</NavLink>
-        <NavLink to="/indents">Indents</NavLink>
-        <NavLink to="/reports">Reports</NavLink>
+        {user?.role === "user" ? (
+          <>
+            <NavLink to="/requisitions">Requisitions</NavLink>
+            <NavLink to="/indent-report">Indent vs Received</NavLink>
+          </>
+        ) : (
+          <>
+            <NavLink to="/" end>Dashboard</NavLink>
+            <NavLink to="/stock">Stock</NavLink>
+            <NavLink to="/purchases">Purchases</NavLink>
+            <NavLink to="/requisitions">Requisitions</NavLink>
+            <NavLink to="/vendors">Vendors</NavLink>
+            <NavLink to="/market">Market Prices</NavLink>
+            <NavLink to="/reports">Reports</NavLink>
+            <NavLink to="/valuation">Valuation</NavLink>
+            <NavLink to="/indent-report">Indent vs Received</NavLink>
+            <NavLink to="/ledger">Ledger &amp; Audit</NavLink>
+            {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
+          </>
+        )}
       </div>
       <div className="nav-actions">
         {user ? (

@@ -7,7 +7,8 @@ replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  repository: nginx
+  # Set by the deploy workflow to <ACR login server>/hotel-inventory.
+  repository: hotel-inventory
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
@@ -50,6 +51,16 @@ securityContext: {}
   # runAsUser: 1000
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+# Port the app listens on inside the container (PORT in the image).
+containerPort: 5100
+
+# Name of a Kubernetes Secret whose keys become environment variables. It must provide
+# DATABASE_URL and JWT_SECRET; the deploy workflow creates "inventory-secrets".
+existingSecret: ""
+
+# Extra plain environment variables, e.g. { ALLOW_SIGNUP: "false" }.
+env: {}
+
 service:
   # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
   type: ClusterIP
@@ -126,11 +137,12 @@ resources: {}
 # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 livenessProbe:
   httpGet:
-    path: /
+    path: /health
     port: http
+  initialDelaySeconds: 20
 readinessProbe:
   httpGet:
-    path: /
+    path: /health
     port: http
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/

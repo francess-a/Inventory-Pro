@@ -16,6 +16,25 @@ This repository contains a **production‑ready inventory management system** wi
 
 ---
 
+## Hotel Central Store application
+
+`inventory-app` is one application: a Node.js server (`inventory-app/server`) that serves
+both the REST API and the React web app (`inventory-app/frontend`), backed by PostgreSQL.
+It handles login and user roles, purchases from multiple suppliers with batch, expiry and
+invoice tracking, department requisitions and issues with values, demand forecasting,
+automatic safety stock, reorder points, maximum stock and order quantities, vendor
+scorecards, market price trends, daily stock valuation (WAC and FIFO), cost of goods per
+outlet, and an append-only, hash-chained audit trail. The architecture blueprint is in
+[`inventory-app/docs/central-store-blueprint.md`](inventory-app/docs/central-store-blueprint.md).
+
+```bash
+docker compose up --build          # PostgreSQL + the app on http://localhost:5100
+```
+
+The first account you sign up with becomes the administrator. See
+[`inventory-app/server/README.md`](inventory-app/server/README.md) for local development,
+the formulas used, roles and the API reference.
+
 ## Architecture
 
 ```mermaid
@@ -99,7 +118,8 @@ your-repo/
 
 Configure these in **Settings → Secrets and variables → Actions**:
 
-- `MONGO_URI` → MongoDB connection string
+- `DATABASE_URL` → PostgreSQL connection string (used by the app, backup and restore)
+- `ACR_LOGIN_SERVER`, `AZURE_CREDENTIALS`, `AZURE_AKS_CLUSTER`, `INVENTORY_HOST` → AKS deploy in `test-deploy-aks.yml`
 - `AZURE_REGISTRY_LOGIN_SERVER`, `AZURE_REGISTRY_USERNAME`, `AZURE_REGISTRY_PASSWORD`
 - `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `AZURE_APP_PLAN`
 - `AZURE_STORAGE_CONNECTION_STRING`
@@ -136,7 +156,7 @@ Configure these in **Settings → Secrets and variables → Actions**:
 - **Azure Web Apps** for hosting
 - **Azure Container Registry** for images
 - **Azure Traffic Manager** for multi‑region routing
-- **MongoDB** for database storage
+- **PostgreSQL** for database storage
 - **Slack** for notifications
 
 ---

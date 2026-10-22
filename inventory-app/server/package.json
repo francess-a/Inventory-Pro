@@ -1,0 +1,27 @@
+{
+  "name": "hotel-inventory-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Central warehouse inventory API for hotels: purchasing, requisitions, replenishment, vendor scorecards and market price trends",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "prisma:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "test:coverage": "node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-lines=80 \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "hotel-inventory",
+  "private": true,
+  "description": "Hotel central store inventory: one Node server (API + web app) on PostgreSQL",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix frontend install",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix frontend start",
+    "db:migrate": "npm --prefix server exec prisma migrate deploy",
+    "db:seed": "npm --prefix server run db:seed",
+    "test": "npm --prefix server test"
+  }
+}
