@@ -9,7 +9,7 @@ const STATES = [
   ["FULL", "Received in full", SERIES[0]],
   ["SHORT", "Received short", SERIES[1]],
   ["REJECTED", "Rejected", SERIES[4]],
-  ["WAITING", "Waiting for approval or issue", OTHER],
+  ["WAITING", "Still waiting", OTHER],
 ];
 const STATE_LABEL = Object.fromEntries(STATES.map(([key, text]) => [key, text]));
 
