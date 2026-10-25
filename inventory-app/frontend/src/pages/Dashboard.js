@@ -1,8 +1,17 @@
-import React from "react";
-import { useSelector } from "react-redux";
+import React, { useEffect } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { setItems } from "../store/inventorySlice";
+import api from "../services/api";
 
 export default function Dashboard() {
+  const dispatch = useDispatch();
   const stockValue = useSelector((state) => state.inventory.totalValue);
+
+  useEffect(() => {
+    api.get("/items").then((res) => {
+      dispatch(setItems(res.data));
+    });
+  }, [dispatch]);
 
   return (
     <div className="dashboard">
