@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% import "_macros.html" as m with context %}
+{% block title %}Master Inventory{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>Master Inventory</h1><a class="button" href="{{ url_for('item_new') }}">Add item</a></div>
+<form class="filters" method="get">
+  <label class="grow">Search <input type="search" name="q" value="{{ q }}" placeholder="Item name, SKU or category"></label>
+  <label>Store <select name="store"><option value="">All</option>{% for s in stores %}<option {% if s == store %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <label>Status <select name="status"><option value="">All</option>{% for s in ['Reorder','OK'] %}<option {% if s == status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <label>Movement <select name="movement"><option value="">All</option>{% for s in ['Fast moving','Slow moving','Non-moving'] %}<option {% if s == movement %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <button>Filter</button>
+  {% if q or store or status or movement %}<a href="{{ url_for('inventory') }}">Clear</a>{% endif %}
+</form>
+<p class="count">{{ items|length }} of {{ total }} items</p>
+<div class="scroll tall">
+<table class="wide">
+  <thead><tr>
+    <th>SKU</th><th>Item name</th><th>Category</th><th class="num">Unit cost</th><th class="num">Total value</th><th>Status</th>
+    <th class="num">Opening stock</th><th class="num">Total inbound</th><th class="num">Total outbound</th><th class="num">Current stock</th><th class="num">Reorder level</th>
+    <th>Store</th><th>Unit</th><th class="num">Min stock</th><th class="num">Reorder point</th><th class="num">Max stock</th><th class="num">EOQ</th><th>Movement</th>
+    <th class="num">Consumption qty (month)</th><th class="num">Consumption value (month)</th><th class="num">Consumption %</th><th>Suggested action</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for i in items %}
+    <tr>
+      <td>{{ i.sku }}</td><td>{{ i.name }}</td><td>{{ i.category }}</td><td class="num">{{ i.unit_cost|money }}</td><td class="num">{{ i.total_value|money }}</td><td>{{ m.badge(i.status) }}</td>
+      <td class="num">{{ i.opening_stock|qty }}</td><td class="num">{{ i.total_in|qty }}</td><td class="num">{{ i.total_out|qty }}</td><td class="num"><b>{{ i.current_stock|qty }}</b></td><td class="num">{{ i.reorder_level|qty }}</td>
+      <td>{{ i.store }}</td><td>{{ i.unit }}</td><td class="num">{{ i.min_stock|qty }}</td><td class="num">{{ i.reorder_point|qty }}</td><td class="num">{{ i.max_stock|qty }}</td><td class="num">{{ i.eoq|qty }}</td><td>{{ m.badge(i.movement) }}</td>
+      <td class="num">{{ i.month_qty|qty }}</td><td class="num">{{ i.month_value|money }}</td><td class="num">{{ i.consumption_pct|pct }}</td><td>{{ i.action }}</td>
+      <td><a href="{{ url_for('item_edit', item_id=i.id) }}">Edit</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="23" class="empty">{% if total %}No items match these filters.{% else %}No items yet. Add one, or import your workbook with <code>python import_excel.py</code>.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

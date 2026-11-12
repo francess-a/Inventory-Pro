@@ -1,0 +1,84 @@
+{% macro datebar(endpoint) %}
+<form class="datebar" method="get" action="{{ url_for(endpoint) }}">
+  <label>As of <input type="date" name="date" value="{{ as_of.isoformat() }}"></label>
+  <button>Show</button>
+  {% if not is_today %}<a href="{{ url_for(endpoint) }}">Back to today</a>{% endif %}
+</form>
+{% endmacro %}
+
+{% macro badge(text) %}
+<span class="badge {{ text|lower|replace(' ', '-') }}">{{ text }}</span>
+{% endmacro %}
+
+{% macro item_search(items, value='') %}
+<label class="grow">Search item
+  <input type="search" name="item" list="item-list" value="{{ value }}" placeholder="Type part of the item name or SKU" autocomplete="off" required autofocus>
+</label>
+<datalist id="item-list">
+  {% for i in items %}<option value="{{ i.label }}">{{ i.sku }} · {{ i.store }} · in stock {{ i.current_stock|qty }} {{ i.unit }}</option>{% endfor %}
+</datalist>
+{% endmacro %}
+
+{% macro actions_table(actions) %}
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Item</th><th>Store</th><th class="num">Current stock</th><th>Movement</th><th>Action</th><th class="num">Value at stake</th></tr></thead>
+  <tbody>
+  {% for i in actions %}
+    <tr><td>{{ loop.index }}</td><td>{{ i.name }} <small>{{ i.sku }}</small></td><td>{{ i.store }}</td><td class="num">{{ i.current_stock|qty }}</td>
+        <td>{{ badge(i.movement) }}</td><td>{{ i.action }}</td><td class="num">{{ i.at_stake|money }}</td></tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">Nothing needs attention.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% macro expenditure_table(rows) %}
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Item</th><th>Store</th><th class="num">Purchase value</th><th class="num">% of month</th></tr></thead>
+  <tbody>
+  {% for i in rows %}
+    <tr><td>{{ loop.index }}</td><td>{{ i.name }} <small>{{ i.sku }}</small></td><td>{{ i.store }}</td><td class="num">{{ i.month_purchase_value|money }}</td><td class="num">{{ i.purchase_pct|pct }}</td></tr>
+  {% else %}
+    <tr><td colspan="5" class="empty">No purchases recorded this month.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% macro store_table(stores) %}
+<div class="scroll">
+<table>
+  <thead><tr><th>Store</th><th class="num">SKUs</th><th class="num">Stock value</th><th>% of value</th><th class="num">Low-stock items</th><th class="num">Month consumption</th></tr></thead>
+  <tbody>
+  {% for s in stores %}
+    <tr><td>{{ s.store }}</td><td class="num">{{ s.skus }}</td><td class="num">{{ s.value|money }}</td>
+        <td><span class="bar"><span style="width: {{ s.pct or 0 }}%"></span></span> {{ s.pct|pct }}</td>
+        <td class="num">{{ s.low_stock }}</td><td class="num">{{ s.month_consumption|money }}</td></tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th>Total</th><th class="num">{{ stores|sum(attribute='skus') }}</th><th class="num">{{ stores|sum(attribute='value')|money }}</th><th></th>
+      <th class="num">{{ stores|sum(attribute='low_stock') }}</th><th class="num">{{ stores|sum(attribute='month_consumption')|money }}</th></tr></tfoot>
+</table>
+</div>
+{% endmacro %}
+
+{% macro period_table(rows, total, fmt, first) %}
+<div class="scroll">
+<table>
+  <thead><tr><th>{{ first }}</th><th class="num">Purchase value</th><th class="num">Purchase %</th><th class="num">Consumption value</th><th class="num">Consumption %</th><th class="num">Revenue</th><th class="num">Cost %</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr {% if not (r.purchases or r.consumption or r.revenue) %}class="quiet"{% endif %}>
+      <td>{{ r.period.strftime(fmt) }}</td><td class="num">{{ r.purchases|money }}</td><td class="num">{{ r.purchase_pct|pct }}</td>
+      <td class="num">{{ r.consumption|money }}</td><td class="num">{{ r.consumption_pct|pct }}</td><td class="num">{{ r.revenue|money }}</td><td class="num">{{ r.cost_pct|pct }}</td></tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th>Total</th><th class="num">{{ total.purchases|money }}</th><th></th><th class="num">{{ total.consumption|money }}</th><th></th><th class="num">{{ total.revenue|money }}</th><th class="num">{{ total.cost_pct|pct }}</th></tr></tfoot>
+</table>
+</div>
+{% endmacro %}

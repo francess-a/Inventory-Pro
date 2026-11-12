@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% import "_macros.html" as m with context %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>Dashboard</h1>{{ m.datebar('dashboard') }}</div>
+
+<section class="cards" aria-label="Inventory">
+  <div class="card"><span>Total SKUs</span><strong>{{ kpi.skus }}</strong></div>
+  <div class="card"><span>Total inventory value</span><strong>{{ kpi.value|money }}</strong></div>
+  <a class="card {% if kpi.low %}warn{% endif %}" href="{{ url_for('inventory', status='Reorder') }}"><span>Low-stock alerts</span><strong>{{ kpi.low }}</strong></a>
+  <div class="card {% if kpi.out %}warn{% endif %}"><span>Out of stock</span><strong>{{ kpi.out }}</strong></div>
+  <a class="card" href="{{ url_for('inventory', movement='Fast moving') }}"><span>Fast-moving items</span><strong>{{ kpi.fast }}</strong></a>
+  <a class="card" href="{{ url_for('inventory', movement='Non-moving') }}"><span>Non-moving items</span><strong>{{ kpi.non }}</strong></a>
+  <div class="card {% if summary.food_cost_over_target %}warn{% endif %}"><span>Food cost % (month)</span><strong>{{ summary.food_cost_pct|pct }}</strong></div>
+  <div class="card"><span>Beverage cost % (month)</span><strong>{{ summary.beverage_cost_pct|pct }}</strong></div>
+</section>
+
+<section class="cards" aria-label="Purchases, consumption and revenue">
+  <div class="card"><span>Purchases · {{ 'today' if is_today else as_of.strftime('%d %b') }}</span><strong>{{ summary.today.purchases|money }}</strong><small>{{ summary.today.purchase_pct|pct }} of month</small></div>
+  <div class="card"><span>Purchases · month</span><strong>{{ summary.month.purchases|money }}</strong><small>{{ summary.month.purchase_of_revenue|pct }} of revenue</small></div>
+  <div class="card"><span>Consumption · {{ 'today' if is_today else as_of.strftime('%d %b') }}</span><strong>{{ summary.today.consumption|money }}</strong><small>{{ summary.today.consumption_pct|pct }} of month</small></div>
+  <div class="card"><span>Consumption · month</span><strong>{{ summary.month.consumption|money }}</strong><small>{{ summary.month.cost_pct|pct }} of revenue</small></div>
+  <div class="card"><span>Revenue · {{ 'today' if is_today else as_of.strftime('%d %b') }}</span><strong>{{ summary.today.revenue|money }}</strong></div>
+  <div class="card"><span>Revenue · month</span><strong>{{ summary.month.revenue|money }}</strong></div>
+</section>
+
+<section><h2>Store costing</h2>{{ m.store_table(stores) }}</section>
+<section><h2>Top 20 actions</h2>{{ m.actions_table(actions) }}</section>
+<div class="two">
+  <section><h2>Top 30 highest expenditure</h2>{{ m.expenditure_table(high) }}</section>
+  <section><h2>Top 30 lowest expenditure</h2>{{ m.expenditure_table(low) }}</section>
+</div>
+<p class="more">Monthly and daily tables are on <a href="{{ url_for('reports', date=as_of.isoformat()) }}">Reports</a>.</p>
+{% endblock %}

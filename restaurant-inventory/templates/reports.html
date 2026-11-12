@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% import "_macros.html" as m with context %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>Reports</h1>{{ m.datebar('reports') }}</div>
+<section><h2>Key figures</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>Metric</th><th class="num">{{ as_of.strftime('%d %b %Y') }}</th><th class="num">{{ summary.month_start.strftime('%B %Y') }}</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>Total purchase value</td><td class="num">{{ summary.today.purchases|money }}</td><td class="num">{{ summary.month.purchases|money }}</td><td>Inbound invoices</td></tr>
+    <tr><td>Purchase % of revenue</td><td class="num">{{ summary.today.purchase_of_revenue|pct }}</td><td class="num">{{ summary.month.purchase_of_revenue|pct }}</td><td>Purchases ÷ revenue</td></tr>
+    <tr><td>Total consumption value</td><td class="num">{{ summary.today.consumption|money }}</td><td class="num">{{ summary.month.consumption|money }}</td><td>Outbound at unit cost</td></tr>
+    <tr><td>Consumption % of revenue</td><td class="num">{{ summary.today.cost_pct|pct }}</td><td class="num">{{ summary.month.cost_pct|pct }}</td><td>All stores ÷ total revenue</td></tr>
+    <tr><td>Total revenue</td><td class="num">{{ summary.today.revenue|money }}</td><td class="num">{{ summary.month.revenue|money }}</td><td>From Sales</td></tr>
+    <tr {% if summary.food_cost_over_target %}class="alert"{% endif %}><td>Food cost %</td><td class="num"></td><td class="num">{{ summary.food_cost_pct|pct }}</td>
+      <td>{% if summary.food_cost_pct is none %}Enter food sales on Sales{% elif summary.food_cost_over_target %}Above the {{ summary.target_food_cost_pct|qty }}% target{% else %}Within the {{ summary.target_food_cost_pct|qty }}% target{% endif %} · dry store consumption ÷ food sales</td></tr>
+    <tr><td>Beverage cost %</td><td class="num"></td><td class="num">{{ summary.beverage_cost_pct|pct }}</td><td>Bar consumption ÷ beverage sales</td></tr>
+  </tbody>
+</table>
+</div></section>
+<section><h2>Store costing</h2>{{ m.store_table(stores) }}</section>
+<section><h2>Top 20 actions</h2>{{ m.actions_table(actions) }}</section>
+<section><h2>Monthly summary · {{ as_of.year }}</h2>{{ m.period_table(summary.monthly, summary.monthly_total, '%b %Y', 'Month') }}</section>
+<section><h2>Daily summary · {{ summary.month_start.strftime('%B %Y') }}</h2>{{ m.period_table(summary.daily, summary.daily_total, '%d %b', 'Date') }}</section>
+<div class="two">
+  <section><h2>Top 30 highest expenditure</h2>{{ m.expenditure_table(high) }}</section>
+  <section><h2>Top 30 lowest expenditure</h2>{{ m.expenditure_table(low) }}</section>
+</div>
+<section><h2>Top consumed items · {{ summary.month_start.strftime('%B %Y') }}</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Item</th><th>Store</th><th class="num">Consumption qty</th><th class="num">Consumption value</th><th class="num">Consumption %</th></tr></thead>
+  <tbody>
+  {% for i in consumers %}
+    <tr><td>{{ loop.index }}</td><td>{{ i.name }} <small>{{ i.sku }}</small></td><td>{{ i.store }}</td><td class="num">{{ i.month_qty|qty }}</td><td class="num">{{ i.month_value|money }}</td><td class="num">{{ i.consumption_pct|pct }}</td></tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">No stock issued this month.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div></section>
+{% endblock %}

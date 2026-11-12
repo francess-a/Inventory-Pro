@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% import "_macros.html" as m with context %}
+{% block title %}Outbound{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>Outbound deliveries</h1><p>Daily issues to departments — OUT / consumption</p></div>
+<form method="post" class="panel entry">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {{ m.item_search(items, form.item or '') }}
+  <label>Date <input type="date" name="date" value="{{ form.date or today.isoformat() }}" required></label>
+  <label>Department <select name="department" required><option value="">Choose…</option>{% for d in departments %}<option {% if d == form.department %}selected{% endif %}>{{ d }}</option>{% endfor %}</select></label>
+  <label>Qty issued <input type="number" name="qty" step="0.001" min="0.001" value="{{ form.qty or '' }}" required></label>
+  <label>Requested by <input name="requested_by" value="{{ form.requested_by or '' }}"></label>
+  <label>Reference <input name="reference" value="{{ form.reference or '' }}"></label>
+  <button>Issue stock</button>
+</form>
+<h2>Recent outbound</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>Date</th><th>SKU</th><th>Item name</th><th>Department</th><th class="num">Qty issued</th><th class="num">Unit cost</th><th class="num">Issue value</th><th>Requested by</th><th>Reference</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr><td>{{ r.date.strftime('%d %b %Y') }}</td><td>{{ r.sku }}</td><td>{{ r.name }}</td><td>{{ r.department }}</td><td class="num">{{ r.qty|qty }}</td><td class="num">{{ r.unit_cost|money }}</td><td class="num">{{ r.value|money }}</td><td>{{ r.requested_by }}</td><td>{{ r.reference }}</td>
+      <td><form method="post" action="{{ url_for('outbound_delete', row_id=r.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link danger">Delete</button></form></td></tr>
+  {% else %}
+    <tr><td colspan="10" class="empty">No stock issued yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% import "_macros.html" as m with context %}
+{% block title %}Departments{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>Department summary</h1>{{ m.datebar('departments') }}</div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Department</th><th class="num">Total units issued</th><th class="num">Total dispatches</th><th class="num">Total issue value</th><th>% of issue value</th><th class="num">This month value</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr><td>{{ r.department }}</td><td class="num">{{ r.units|qty }}</td><td class="num">{{ r.dispatches }}</td><td class="num">{{ r.value|money }}</td>
+        <td><span class="bar"><span style="width: {{ r.pct or 0 }}%"></span></span> {{ r.pct|pct }}</td><td class="num">{{ r.month_value|money }}</td></tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th>Total</th><th class="num">{{ totals.units|qty }}</th><th class="num">{{ totals.dispatches }}</th><th class="num">{{ totals.value|money }}</th><th></th><th class="num">{{ totals.month_value|money }}</th></tr></tfoot>
+</table>
+</div>
+{% endblock %}

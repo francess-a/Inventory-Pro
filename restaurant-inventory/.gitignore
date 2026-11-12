@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+# Your workbook stays out of the repository; import it with import_excel.py
+*.xlsx

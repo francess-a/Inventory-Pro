@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Add item' if new else 'Edit item' }}{% endblock %}
+{% block content %}
+<div class="pagehead"><h1>{{ 'Add item' if new else 'Edit ' ~ item.sku }}</h1></div>
+<form method="post" class="panel form-grid">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if new %}<label>SKU <input name="sku" value="{{ item.sku or '' }}" placeholder="Leave blank to generate"></label>{% endif %}
+  <label>Item name <input name="name" value="{{ item.name or '' }}" required></label>
+  <label>Category <input name="category" value="{{ item.category or '' }}"></label>
+  <label>Store <select name="store">{% for s in stores %}<option {% if s == item.store %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <label>Unit <input name="unit" value="{{ item.unit or '' }}" placeholder="e.g. 1kg, pcs"></label>
+  <label>Unit cost <input name="unit_cost" type="number" step="0.01" min="0" value="{{ item.unit_cost if item.unit_cost is not none and item.unit_cost != '' else 0 }}" required></label>
+  <label>Opening stock <input name="opening_stock" type="number" step="0.001" value="{{ item.opening_stock if item.opening_stock is not none and item.opening_stock != '' else 0 }}" required></label>
+  <label>Reorder level <input name="manual_reorder_level" type="number" step="0.001" min="0" value="{{ item.manual_reorder_level if item.manual_reorder_level is not none and item.manual_reorder_level != '' else 0 }}" required></label>
+  <div class="actions"><button>Save</button> <a href="{{ url_for('inventory') }}">Cancel</a></div>
+</form>
+{% if not new %}
+<form method="post" action="{{ url_for('item_archive', item_id=item.id) }}" class="danger-zone">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="danger">Archive this item</button> <small>Hides it from lists. Its inbound and outbound history is kept.</small>
+</form>
+{% endif %}
+{% endblock %}

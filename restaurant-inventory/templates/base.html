@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Inventory{% endblock %} · Restaurant Inventory</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('dashboard') }}">Restaurant Inventory</a>
+    <nav aria-label="Main">
+      {% set pages = [('dashboard','Dashboard'),('inventory','Master Inventory'),('inbound','Inbound'),('outbound','Outbound'),('departments','Departments'),('reports','Reports'),('sales','Sales'),('settings','Settings')] %}
+      {% for ep, label in pages %}
+        <a href="{{ url_for(ep) }}" {% if request.endpoint == ep %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    {% if login_enabled and session.get('auth') %}
+      <form method="post" action="{{ url_for('logout') }}" class="logout">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Log out</button>
+      </form>
+    {% endif %}
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}<p class="flash {{ cat }}" role="status">{{ msg }}</p>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
